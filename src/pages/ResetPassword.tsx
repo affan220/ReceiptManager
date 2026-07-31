@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth-context";
+import { updatePassword } from "@/lib/DatabaseService";
 import { AuthLayout } from "./Login";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,18 +11,25 @@ import { Loader2, KeyRound } from "lucide-react";
 
 export default function ResetPassword() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password.length < 6) { toast.error("Password must be at least 6 characters"); return; }
+    if (!user) { toast.error("No user is signed in."); return; }
+
     setBusy(true);
-    const { error } = await supabase.auth.updateUser({ password });
-    setBusy(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success("Password updated");
-    navigate("/", { replace: true });
+    try {
+      await updatePassword(user.id, password);
+      toast.success("Password updated");
+      navigate("/", { replace: true });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update password.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (

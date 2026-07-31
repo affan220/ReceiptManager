@@ -1,10 +1,9 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "@/integrations/supabase/client";
+import { getCurrentUser, logout } from "./DatabaseService";
+import { toast } from "sonner";
 
 interface AuthCtx {
-  user: User | null;
-  session: Session | null;
+  user: { id: string; username: string; createdAt: string; user_metadata: { username: string } } | null;
   loading: boolean;
   signOut: () => Promise<void>;
 }
@@ -12,32 +11,47 @@ interface AuthCtx {
 const Ctx = createContext<AuthCtx | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<AuthCtx["user"]>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Listener first
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      setLoading(false);
-    });
-    // Then initial
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoading(false);
-    });
-    return () => sub.subscription.unsubscribe();
+    const load = async () => {
+      try {
+        const current = await getCurrentUser();
+        setUser(current);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error(message || "Could not initialize authentication.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const handleAuthChange = async () => {
+      try {
+        const current = await getCurrentUser();
+        setUser(current);
+      } catch {
+        setUser(null);
+      }
+    };
+
+    load();
+    window.addEventListener("storage", handleAuthChange);
+    window.addEventListener("auth-change", handleAuthChange);
+
+    return () => {
+      window.removeEventListener("storage", handleAuthChange);
+      window.removeEventListener("auth-change", handleAuthChange);
+    };
   }, []);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await logout();
+    setUser(null);
   };
 
-  return (
-    <Ctx.Provider value={{ user: session?.user ?? null, session, loading, signOut }}>
-      {children}
-    </Ctx.Provider>
-  );
+  return <Ctx.Provider value={{ user, loading, signOut }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth() {

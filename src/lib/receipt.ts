@@ -1,20 +1,30 @@
 import jsPDF from "jspdf";
 import QRCode from "qrcode";
 import { Member, OrgSettings, MONTHS } from "./store";
-import { supabase } from "@/integrations/supabase/client";
+import { getCurrentUser, saveReceipt } from "./DatabaseService";
 
-async function nextReceiptNumber(prefix: string): Promise<string> {
-  const { data, error } = await supabase.rpc("next_receipt_number");
-  const year = new Date().getFullYear();
-  const seq = !error && typeof data === "number" ? data : Math.floor(Date.now() / 1000);
-  return `${prefix}-${year}-${String(seq).padStart(5, "0")}`;
+function formatPdfAmount(amount: number) {
+  return `RS ${amount.toLocaleString()}`;
 }
 
 export async function generateReceiptPDF(member: Member, settings: OrgSettings) {
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    throw new Error("User is not authenticated.");
+  }
+
+  const receiptNo = await saveReceipt(
+    currentUser.id,
+    member.id,
+    member.month,
+    member.year,
+    member.amount,
+    member.status,
+  );
+
   const doc = new jsPDF({ unit: "pt", format: "a5", orientation: "landscape" });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
-  const receiptNo = await nextReceiptNumber(settings.receiptPrefix);
 
   // Border
   doc.setDrawColor(20, 120, 90);
@@ -93,7 +103,7 @@ export async function generateReceiptPDF(member: Member, settings: OrgSettings) 
   doc.text("Amount", pageW - 160, 188);
   doc.setFontSize(20);
   doc.setTextColor(20, 120, 90);
-  doc.text(`${settings.currency}${member.amount.toLocaleString()}`, pageW - 50, 220, { align: "right" });
+  doc.text(formatPdfAmount(member.amount), pageW - 50, 220, { align: "right" });
   doc.setTextColor(30, 30, 30);
 
   // QR

@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, FileBarChart, Settings, Upload, Printer, Moon, LogOut } from "lucide-react";
+import { LayoutDashboard, FileBarChart, Settings, Upload, Printer, Moon, LogOut, X } from "lucide-react";
 import { APP_VERSION, initialsOf } from "@/lib/store";
 import { useApp } from "@/lib/app-context";
 import { useAuth } from "@/lib/auth-context";
@@ -14,11 +14,15 @@ const nav = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
-export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+export function Sidebar({ onNavigate, onToggle }: { onNavigate?: () => void; onToggle?: () => void }) {
   const { settings, profile } = useApp();
   const { user, signOut } = useAuth();
 
-  const displayName = profile?.full_name || user?.email?.split("@")[0] || "User";
+  const displayName =
+    (user?.user_metadata?.username as string | undefined) ||
+    profile?.full_name ||
+    user?.username ||
+    "User";
   const orgName = profile?.organization || settings.name;
 
   const handleSignOut = async () => {
@@ -36,10 +40,21 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <span>{initialsOf(settings.name)}</span>
           )}
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="font-display text-base font-bold leading-tight truncate">{settings.name}</h1>
           <p className="text-[11px] text-sidebar-foreground/60 truncate">Receipt Manager</p>
         </div>
+        {onToggle && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onToggle}
+            aria-label="Close sidebar"
+            className="h-8 w-8 shrink-0 text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
@@ -86,7 +101,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <div className="border-t border-sidebar-border px-5 py-3 text-[11px] text-sidebar-foreground/55">
         <div className="flex items-center justify-between">
           <span>v{APP_VERSION}</span>
-          <span className="flex items-center gap-1"><Moon className="h-3 w-3" /> SaaS</span>
+          <span className="flex items-center gap-1"><Moon className="h-3 w-3" /> DEVELOPED BY AFFAN ANSARI </span>
         </div>
       </div>
     </aside>

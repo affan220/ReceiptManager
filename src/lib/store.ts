@@ -1,4 +1,4 @@
-// Data model types. Storage is now Supabase (see app-context.tsx).
+// Data model types. Storage is now local IndexedDB (see DatabaseService.ts).
 // Schema kept stable so a Python/Kivy mirror app can use the same field names.
 
 export type MemberStatus = "paid" | "unpaid" | "pending";

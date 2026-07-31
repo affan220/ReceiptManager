@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { StatCard } from "@/components/StatCard";
 import { MemberCard } from "@/components/MemberCard";
 import { MemberDialog } from "@/components/MemberDialog";
+import { StatusMultiSelect, type StatusFilterValue } from "@/components/StatusMultiSelect";
 import { useApp } from "@/lib/app-context";
 import { Member, MONTHS } from "@/lib/store";
 import { Input } from "@/components/ui/input";
@@ -11,16 +12,34 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Users, CheckCircle2, XCircle, Clock, Wallet, TrendingUp, AlertTriangle, Percent, Plus, Search } from "lucide-react";
 
 const ALL = "all";
+const HOLD = "hold";
+const ALL_STATUSES: StatusFilterValue[] = ["paid", "unpaid", "pending", "hold"];
+const DASHBOARD_MONTH_KEY = "receipt-manager-dashboard-month";
+const DASHBOARD_YEAR_KEY = "receipt-manager-dashboard-year";
+
+function readStoredValue(key: string, fallback: string) {
+  if (typeof window === "undefined") return fallback;
+  return window.localStorage.getItem(key) ?? fallback;
+}
+
+function saveStoredValue(key: string, value: string) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(key, value);
+  }
+}
 
 export default function Dashboard() {
   const { members, settings } = useApp();
   const now = new Date();
-  const [month, setMonth] = useState<string>(String(now.getMonth() + 1));
-  const [year, setYear] = useState<string>(String(now.getFullYear()));
-  const [status, setStatus] = useState<string>(ALL);
+  const [month, setMonth] = useState<string>(() => readStoredValue(DASHBOARD_MONTH_KEY, String(now.getMonth() + 1)));
+  const [year, setYear] = useState<string>(() => readStoredValue(DASHBOARD_YEAR_KEY, String(now.getFullYear())));
+  const [statuses, setStatuses] = useState<StatusFilterValue[]>(ALL_STATUSES);
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<Member | null>(null);
   const [open, setOpen] = useState(false);
+
+  const selectedMonthLabel = month === ALL ? "All months" : MONTHS[Number(month) - 1];
+  const selectedYearLabel = year === ALL ? "All years" : year;
 
   const years = useMemo(() => {
     const set = new Set<number>(members.map((m) => m.year));
@@ -32,11 +51,14 @@ export default function Dashboard() {
     return members.filter((m) => {
       if (month !== ALL && m.month !== Number(month)) return false;
       if (year !== ALL && m.year !== Number(year)) return false;
-      if (status !== ALL && m.status !== status) return false;
+      const matchesStatus = m.hold
+        ? statuses.includes(HOLD as StatusFilterValue) || statuses.includes(m.status as StatusFilterValue)
+        : statuses.includes(m.status as StatusFilterValue);
+      if (!matchesStatus) return false;
       if (search && !`${m.name} ${m.phone}`.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-  }, [members, month, year, status, search]);
+  }, [members, month, year, statuses, search]);
 
   const stats = useMemo(() => {
     const total = filtered.length;
@@ -56,10 +78,20 @@ export default function Dashboard() {
 
   const c = settings.currency;
 
+  const handleMonthChange = (value: string) => {
+    setMonth(value);
+    saveStoredValue(DASHBOARD_MONTH_KEY, value);
+  };
+
+  const handleYearChange = (value: string) => {
+    setYear(value);
+    saveStoredValue(DASHBOARD_YEAR_KEY, value);
+  };
+
   return (
     <AppShell
       title="Dashboard"
-      subtitle={`Overview of contributions and collections — ${MONTHS[now.getMonth()]} ${now.getFullYear()}`}
+      subtitle={`Overview of contributions and collections - ${selectedMonthLabel} ${selectedYearLabel}`}
     >
       {/* Filters */}
       <div className="card-surface p-4 mb-6 flex flex-wrap items-center gap-3">
@@ -72,29 +104,21 @@ export default function Dashboard() {
             className="pl-9"
           />
         </div>
-        <Select value={month} onValueChange={setMonth}>
+        <Select value={month} onValueChange={handleMonthChange}>
           <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All months</SelectItem>
             {MONTHS.map((m, i) => <SelectItem key={m} value={String(i + 1)}>{m}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={year} onValueChange={setYear}>
+        <Select value={year} onValueChange={handleYearChange}>
           <SelectTrigger className="w-[110px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All years</SelectItem>
             {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All status</SelectItem>
-            <SelectItem value="paid">Paid</SelectItem>
-            <SelectItem value="unpaid">Unpaid</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-          </SelectContent>
-        </Select>
+        <StatusMultiSelect value={statuses} onValueChange={setStatuses} className="w-[180px]" />
         <Button onClick={() => { setEditing(null); setOpen(true); }}>
           <Plus className="mr-1.5 h-4 w-4" /> Add member
         </Button>
@@ -106,7 +130,7 @@ export default function Dashboard() {
         <StatCard label="Paid" value={stats.paid} icon={CheckCircle2} tone="success" />
         <StatCard label="Unpaid" value={stats.unpaid} icon={XCircle} tone="destructive" />
         <StatCard label="Pending" value={stats.pending} icon={Clock} tone="warning" />
-        <StatCard label="Monthly Collection" value={`${c}${stats.monthly.toLocaleString()}`} icon={Wallet} tone="primary" hint={`${MONTHS[now.getMonth()]} ${now.getFullYear()}`} />
+        <StatCard label="Monthly Collection" value={`${c}${stats.monthly.toLocaleString()}`} icon={Wallet} tone="primary" hint={`${selectedMonthLabel} ${selectedYearLabel}`} />
         <StatCard label="Yearly Collection" value={`${c}${stats.yearly.toLocaleString()}`} icon={TrendingUp} tone="success" />
         <StatCard label="Outstanding" value={`${c}${stats.outstanding.toLocaleString()}`} icon={AlertTriangle} tone="destructive" />
         <StatCard label="Collection %" value={`${stats.pct}%`} icon={Percent} tone="accent" hint={`${stats.paid} of ${stats.total} paid`} />

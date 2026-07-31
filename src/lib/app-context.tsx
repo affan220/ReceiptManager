@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useState, ReactNode, useCallback } from "react";
 import { Member, OrgSettings, defaultSettings } from "./store";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./auth-context";
 import { toast } from "sonner";
+import { initializeDatabase, addMember as dbAddMember, updateMember as dbUpdateMember, deleteMember as dbDeleteMember, getMembers as dbGetMembers, saveSettings as dbSaveSettings, loadSettings as dbLoadSettings } from "./DatabaseService";
 
 interface Profile {
   id: string;
@@ -75,6 +75,21 @@ function memberToInsert(m: Partial<Member>, userId: string) {
   };
 }
 
+function sanitizeMemberPatch(patch: Partial<Member>) {
+  const cleaned = { ...patch } as Partial<Member> & { id?: string; created_at?: string; updated_at?: string };
+  delete cleaned.id;
+  delete cleaned.created_at;
+  delete cleaned.updated_at;
+
+  if (cleaned.amount !== undefined) cleaned.amount = Number(cleaned.amount);
+  if (cleaned.month !== undefined) cleaned.month = Number(cleaned.month);
+  if (cleaned.year !== undefined) cleaned.year = Number(cleaned.year);
+  if (cleaned.hold !== undefined) cleaned.hold = Boolean(cleaned.hold);
+  if (cleaned.months_pending !== undefined) cleaned.months_pending = Number(cleaned.months_pending);
+
+  return cleaned as Partial<Member>;
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [members, setMembers] = useState<Member[]>([]);
@@ -90,72 +105,96 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
+
     setLoading(true);
+    try {
+      await initializeDatabase();
+      const [membersList, savedSettings] = await Promise.all([
+        dbGetMembers(user.id),
+        dbLoadSettings(user.id),
+      ]);
 
-    const [memRes, setRes, profRes] = await Promise.all([
-      supabase.from("members").select("*").order("created_at", { ascending: false }),
-      supabase.from("org_settings").select("*").eq("user_id", user.id).maybeSingle(),
-      supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
-    ]);
-
-    if (memRes.error) toast.error("Failed to load members");
-    else setMembers((memRes.data ?? []).map(rowToMember));
-
-    if (setRes.data) {
-      setSettings({
-        name: setRes.data.name,
-        tagline: setRes.data.tagline,
-        address: setRes.data.address,
-        phone: setRes.data.phone,
-        email: setRes.data.email,
-        logoDataUrl: setRes.data.logo_data_url,
-        signatureLabel: setRes.data.signature_label,
-        receiptPrefix: setRes.data.receipt_prefix,
-        currency: setRes.data.currency,
+      setMembers(membersList);
+      if (savedSettings) {
+        setSettings({ ...defaultSettings, ...savedSettings });
+      } else {
+        await dbSaveSettings(user.id, defaultSettings);
+        setSettings(defaultSettings);
+      }
+      setProfile({
+        id: user.id,
+        full_name: null,
+        organization: null,
+        phone: null,
+        address: null,
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[app] load error:", error);
+      toast.error(message || "Failed to initialize application data.");
+      setMembers([]);
+      setSettings(defaultSettings);
+      setProfile(null);
+    } finally {
+      setLoading(false);
     }
-
-    if (profRes.data) setProfile(profRes.data as Profile);
-
-    setLoading(false);
   }, [user]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
   const addMember = useCallback(async (m: Partial<Member>) => {
     if (!user) return null;
-    const { data, error } = await supabase
-      .from("members")
-      .insert(memberToInsert(m, user.id))
-      .select()
-      .single();
-    if (error) { toast.error(error.message); return null; }
-    const created = rowToMember(data as DbMember);
-    setMembers((prev) => [created, ...prev]);
-    return created;
+    try {
+      const created = await dbAddMember(user.id, m);
+      setMembers((prev) => [created, ...prev]);
+      toast.success("Member added successfully");
+      return created;
+    } catch (error) {
+      console.error("[members] insert error:", error);
+      toast.error(error instanceof Error ? error.message : "Could not add member.");
+      return null;
+    }
   }, [user]);
 
   const addMembers = useCallback(async (list: Partial<Member>[]) => {
     if (!user || !list.length) return 0;
-    const rows = list.map((m) => memberToInsert(m, user.id));
-    const { data, error } = await supabase.from("members").insert(rows).select();
-    if (error) { toast.error(error.message); return 0; }
-    const created = (data ?? []).map((r) => rowToMember(r as DbMember));
-    setMembers((prev) => [...created, ...prev]);
-    return created.length;
+    const created: Member[] = [];
+    try {
+      for (const member of list) {
+        const added = await dbAddMember(user.id, member);
+        created.push(added);
+      }
+      setMembers((prev) => [...created, ...prev]);
+      toast.success(`${created.length} member${created.length === 1 ? "" : "s"} imported successfully`);
+      return created.length;
+    } catch (error) {
+      console.error("[members] bulk insert error:", error);
+      toast.error(error instanceof Error ? error.message : "Could not import members.");
+      return created.length;
+    }
   }, [user]);
 
   const updateMember = useCallback(async (id: string, patch: Partial<Member>) => {
-    const { error } = await supabase.from("members").update(patch).eq("id", id);
-    if (error) { toast.error(error.message); return; }
-    setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch, updated_at: new Date().toISOString() } : m)));
-  }, []);
+    if (!user) return;
+    try {
+      await dbUpdateMember(id, user.id, sanitizeMemberPatch(patch));
+      setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch, updated_at: new Date().toISOString() } : m)));
+    } catch (error) {
+      console.error("[members] update error:", error);
+      toast.error(error instanceof Error ? error.message : "Could not update member.");
+    }
+  }, [user]);
 
   const deleteMember = useCallback(async (id: string) => {
-    const { error } = await supabase.from("members").delete().eq("id", id);
-    if (error) { toast.error(error.message); return; }
-    setMembers((prev) => prev.filter((m) => m.id !== id));
-  }, []);
+    if (!user) return;
+    try {
+      await dbDeleteMember(id, user.id);
+      setMembers((prev) => prev.filter((m) => m.id !== id));
+    } catch (error) {
+      console.error("[members] delete error:", error);
+      toast.error(error instanceof Error ? error.message : "Could not delete member.");
+    }
+  }, [user]);
 
   const toggleHold = useCallback(async (id: string) => {
     const target = members.find((m) => m.id === id);
@@ -173,20 +212,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const updateSettings = useCallback(async (s: OrgSettings) => {
     if (!user) return;
-    const { error } = await supabase.from("org_settings").upsert({
-      user_id: user.id,
-      name: s.name,
-      tagline: s.tagline,
-      address: s.address,
-      phone: s.phone,
-      email: s.email,
-      logo_data_url: s.logoDataUrl,
-      signature_label: s.signatureLabel,
-      receipt_prefix: s.receiptPrefix,
-      currency: s.currency,
-    });
-    if (error) { toast.error(error.message); return; }
-    setSettings(s);
+    try {
+      await dbSaveSettings(user.id, s);
+      setSettings(s);
+      toast.success("Settings saved");
+    } catch (error) {
+      console.error("[settings] save error:", error);
+      toast.error(error instanceof Error ? error.message : "Could not save settings.");
+    }
   }, [user]);
 
   const value = useMemo<AppCtx>(() => ({

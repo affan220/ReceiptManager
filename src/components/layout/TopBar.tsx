@@ -1,4 +1,4 @@
-import { Moon, RefreshCw, Settings as SettingsIcon, Sun, Menu } from "lucide-react";
+import { Moon, RefreshCw, Settings as SettingsIcon, Sun, Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/hooks/use-theme";
 import { useApp } from "@/lib/app-context";
@@ -8,10 +8,11 @@ import { toast } from "sonner";
 interface Props {
   title: string;
   subtitle?: string;
-  onOpenSidebar?: () => void;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
 }
 
-export function TopBar({ title, subtitle, onOpenSidebar }: Props) {
+export function TopBar({ title, subtitle, sidebarOpen, onToggleSidebar }: Props) {
   const { theme, toggle } = useTheme();
   const { refresh } = useApp();
   const navigate = useNavigate();
@@ -21,11 +22,10 @@ export function TopBar({ title, subtitle, onOpenSidebar }: Props) {
       <Button
         variant="ghost"
         size="icon"
-        className="md:hidden"
-        onClick={onOpenSidebar}
-        aria-label="Open menu"
+        onClick={onToggleSidebar}
+        aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
       >
-        <Menu className="h-5 w-5" />
+        {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
       </Button>
 
       <div className="min-w-0 flex-1">

@@ -21,6 +21,8 @@ const statusStyles: Record<Member["status"], string> = {
 
 export function MemberCard({ member, onEdit }: Props) {
   const { settings, deleteMember, toggleHold, setStatus } = useApp();
+  const pendingMonths = Number(member.months_pending ?? 0);
+  const pendingTotal = member.amount * Math.max(1, pendingMonths);
 
   const whatsapp = () => {
     const phone = member.phone.replace(/[^\d]/g, "");
@@ -104,10 +106,14 @@ export function MemberCard({ member, onEdit }: Props) {
           <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusStyles[member.status]}`}>
             {member.status}
           </span>
-          {member.months_pending > 0 && (
-            <span className="text-[11px] text-muted-foreground">
-              {member.months_pending} month{member.months_pending > 1 ? "s" : ""} pending
-            </span>
+          {pendingMonths > 0 && (
+            <div className="text-[11px] text-muted-foreground text-right leading-tight">
+              <div>
+                {pendingMonths} month{pendingMonths > 1 ? "s" : ""} pending
+              </div>
+              <div>Monthly: RS {member.amount.toLocaleString()}</div>
+              <div>Total: RS {pendingTotal.toLocaleString()}</div>
+            </div>
           )}
         </div>
       </div>

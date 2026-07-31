@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatCard } from "@/components/StatCard";
+import { StatusMultiSelect, type StatusFilterValue } from "@/components/StatusMultiSelect";
 import { useApp } from "@/lib/app-context";
 import { MONTHS } from "@/lib/store";
 import { Input } from "@/components/ui/input";
@@ -15,18 +16,41 @@ import { toast } from "sonner";
 
 type SortKey = "name" | "amount" | "month" | "year" | "status";
 const PAGE_SIZE = 10;
+const ALL_STATUSES: StatusFilterValue[] = ["paid", "unpaid", "pending", "hold"];
+
+function formatPdfAmount(amount: number) {
+  return `RS ${amount.toLocaleString()}`;
+}
+
+function getPendingAmounts(member: { amount: number; months_pending: number }) {
+  const pendingMonths = Number(member.months_pending ?? 0);
+  const monthlyPendingAmount = Number(member.amount ?? 0);
+  const totalPendingAmount = monthlyPendingAmount * Math.max(1, pendingMonths);
+  return { pendingMonths, monthlyPendingAmount, totalPendingAmount };
+}
+
+function getExportPendingAmounts(member: { amount: number; months_pending: number; status: string }) {
+  const pending = getPendingAmounts(member);
+  const totalPendingAmount = member.status === "paid" ? 0 : pending.totalPendingAmount;
+  return { ...pending, totalPendingAmount };
+}
 
 export default function Reports() {
   const { members, settings } = useApp();
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
+  const [statuses, setStatuses] = useState<StatusFilterValue[]>(ALL_STATUSES);
+  const [month, setMonth] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
 
   const filtered = useMemo(() => {
     let list = members.filter((m) => {
-      if (status !== "all" && m.status !== status) return false;
+      const matchesStatus = m.hold
+        ? statuses.includes("hold") || statuses.includes(m.status as StatusFilterValue)
+        : statuses.includes(m.status as StatusFilterValue);
+      if (!matchesStatus) return false;
+      if (month !== "all" && m.month !== Number(month)) return false;
       if (search && !`${m.name} ${m.phone}`.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
@@ -38,7 +62,7 @@ export default function Reports() {
       return 0;
     });
     return list;
-  }, [members, search, status, sortKey, sortDir]);
+  }, [members, search, statuses, month, sortKey, sortDir]);
 
   const paged = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -48,7 +72,8 @@ export default function Reports() {
 
   const summary = useMemo(() => {
     const totalCollected = members.filter((m) => m.status === "paid").reduce((s, m) => s + m.amount, 0);
-    const outstanding = members.filter((m) => m.status !== "paid")
+    const outstanding = members
+      .filter((m) => m.status !== "paid")
       .reduce((s, m) => s + m.amount * Math.max(1, m.months_pending || 1), 0);
     const paidCount = members.filter((m) => m.status === "paid").length;
     return { totalCollected, outstanding, paidCount, total: members.length };
@@ -56,28 +81,57 @@ export default function Reports() {
 
   const toggleSort = (k: SortKey) => {
     if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(k); setSortDir("asc"); }
+    else {
+      setSortKey(k);
+      setSortDir("asc");
+    }
   };
 
   const c = settings.currency;
 
   const exportCSV = () => {
-    const headers = ["Name", "Phone", "Amount", "Status", "Month", "Year", "Months Pending", "Hold"];
-    const rows = filtered.map((m) => [m.name, m.phone, m.amount, m.status, MONTHS[m.month - 1], m.year, m.months_pending, m.hold ? "Yes" : "No"]);
+    const headers = ["Name", "Phone", "Amount", "Status", "Month", "Year", "Months Pending", "Monthly Pending", "Pending Total", "Hold"];
+    const rows = filtered.map((m) => {
+      const pending = getPendingAmounts(m);
+      return [
+        m.name,
+        m.phone,
+        m.amount,
+        m.status,
+        MONTHS[m.month - 1],
+        m.year,
+        pending.pendingMonths,
+        pending.monthlyPendingAmount,
+        pending.totalPendingAmount,
+        m.hold ? "Yes" : "No",
+      ];
+    });
     const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `members-${Date.now()}.csv`; a.click();
+    a.href = url;
+    a.download = `members-${Date.now()}.csv`;
+    a.click();
     URL.revokeObjectURL(url);
     toast.success("CSV exported");
   };
 
   const exportXLSX = () => {
-    const data = filtered.map((m) => ({
-      Name: m.name, Phone: m.phone, Amount: m.amount, Status: m.status,
-      Month: MONTHS[m.month - 1], Year: m.year, "Months Pending": m.months_pending, Hold: m.hold ? "Yes" : "No",
-    }));
+    const data = filtered.map((m) => {
+      const pending = getExportPendingAmounts(m);
+      return {
+        Name: m.name,
+        Phone: m.phone,
+        Amount: m.amount,
+        Status: m.status,
+        Month: MONTHS[m.month - 1],
+        Year: m.year,
+        "Months Pending": pending.pendingMonths,
+        "Pending Total": pending.totalPendingAmount,
+        Hold: m.hold ? "Yes" : "No",
+      };
+    });
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Members");
@@ -88,14 +142,25 @@ export default function Reports() {
   const exportPDF = () => {
     const doc = new jsPDF();
     doc.setFontSize(16);
-    doc.text(`${settings.name} — Members Report`, 14, 18);
+    doc.text(`${settings.name} - Members Report`, 14, 18);
     doc.setFontSize(10);
     doc.setTextColor(120);
     doc.text(`Generated ${new Date().toLocaleString()}`, 14, 25);
     autoTable(doc, {
       startY: 32,
-      head: [["Name", "Phone", "Amount", "Status", "Period", "Pending"]],
-      body: filtered.map((m) => [m.name, m.phone, `${c}${m.amount}`, m.status, `${MONTHS[m.month - 1]} ${m.year}`, m.months_pending]),
+      head: [["Name", "Phone", "Amount", "Status", "Period", "Months", "Pending Total"]],
+      body: filtered.map((m) => {
+        const pending = getExportPendingAmounts(m);
+        return [
+          m.name,
+          m.phone,
+          formatPdfAmount(m.amount),
+          m.status,
+          `${MONTHS[m.month - 1]} ${m.year}`,
+          pending.pendingMonths,
+          formatPdfAmount(pending.totalPendingAmount),
+        ];
+      }),
       headStyles: { fillColor: [20, 120, 90] },
       styles: { fontSize: 9 },
     });
@@ -117,13 +182,16 @@ export default function Reports() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search members..." className="pl-9" />
         </div>
-        <Select value={status} onValueChange={(v) => { setStatus(v); setPage(1); }}>
-          <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
+        <StatusMultiSelect value={statuses} onValueChange={(next) => { setStatuses(next); setPage(1); }} className="w-[180px]" />
+        <Select value={month} onValueChange={(v) => { setMonth(v); setPage(1); }}>
+          <SelectTrigger className="w-[170px]"><SelectValue placeholder="All months" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All status</SelectItem>
-            <SelectItem value="paid">Paid</SelectItem>
-            <SelectItem value="unpaid">Unpaid</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="all">All months</SelectItem>
+            {MONTHS.map((label, index) => (
+              <SelectItem key={label} value={String(index + 1)}>
+                {label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <div className="flex gap-2">
@@ -148,28 +216,35 @@ export default function Reports() {
                   </TableHead>
                 ))}
                 <TableHead>Phone</TableHead>
-                <TableHead className="text-right">Pending</TableHead>
+                <TableHead className="text-right">Months Pending</TableHead>
+                <TableHead className="text-right">Monthly Pending</TableHead>
+                <TableHead className="text-right">Pending Total</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paged.map((m) => (
-                <TableRow key={m.id}>
-                  <TableCell className="font-medium">{m.name}</TableCell>
-                  <TableCell>{c}{m.amount.toLocaleString()}</TableCell>
-                  <TableCell>{MONTHS[m.month - 1]}</TableCell>
-                  <TableCell>{m.year}</TableCell>
-                  <TableCell>
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold uppercase ${
-                      m.status === "paid" ? "bg-success/15 text-success" :
-                      m.status === "unpaid" ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"
-                    }`}>{m.status}</span>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{m.phone || "—"}</TableCell>
-                  <TableCell className="text-right">{m.months_pending}</TableCell>
-                </TableRow>
-              ))}
+              {paged.map((m) => {
+                const pending = getPendingAmounts(m);
+                return (
+                  <TableRow key={m.id}>
+                    <TableCell className="font-medium">{m.name}</TableCell>
+                    <TableCell>{c}{m.amount.toLocaleString()}</TableCell>
+                    <TableCell>{MONTHS[m.month - 1]}</TableCell>
+                    <TableCell>{m.year}</TableCell>
+                    <TableCell>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold uppercase ${
+                        m.status === "paid" ? "bg-success/15 text-success" :
+                        m.status === "unpaid" ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"
+                      }`}>{m.status}</span>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{m.phone || "—"}</TableCell>
+                    <TableCell className="text-right">{pending.pendingMonths}</TableCell>
+                    <TableCell className="text-right">RS {pending.monthlyPendingAmount.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">RS {pending.totalPendingAmount.toLocaleString()}</TableCell>
+                  </TableRow>
+                );
+              })}
               {paged.length === 0 && (
-                <TableRow><TableCell colSpan={7} className="text-center py-10 text-muted-foreground">No results</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} className="text-center py-10 text-muted-foreground">No results</TableCell></TableRow>
               )}
             </TableBody>
           </Table>

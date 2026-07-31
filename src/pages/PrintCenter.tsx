@@ -12,13 +12,20 @@ import autoTable from "jspdf-autotable";
 import { toast } from "sonner";
 import { Printer, FileText, ListChecks, Search } from "lucide-react";
 
+function formatPdfAmount(amount: number) {
+  return `RS ${amount.toLocaleString()}`;
+}
+
+type PrintStatusFilter = "all" | "paid" | "unpaid" | "pending" | "hold";
+
 export default function PrintCenter() {
   const { members, settings } = useApp();
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState<PrintStatusFilter>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const filtered = useMemo(() => members.filter((m) => {
+    if (status === "hold") return m.hold && (!search || `${m.name} ${m.phone}`.toLowerCase().includes(search.toLowerCase()));
     if (status !== "all" && m.status !== status) return false;
     if (search && !`${m.name} ${m.phone}`.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
@@ -58,7 +65,7 @@ export default function PrintCenter() {
     autoTable(doc, {
       startY: 32,
       head: [["#", "Name", "Phone", "Amount", "Status", "Period"]],
-      body: list.map((m, i) => [i + 1, m.name, m.phone, `${settings.currency}${m.amount}`, m.status, `${MONTHS[m.month - 1]} ${m.year}`]),
+      body: list.map((m, i) => [i + 1, m.name, m.phone, formatPdfAmount(m.amount), m.status, `${MONTHS[m.month - 1]} ${m.year}`]),
       headStyles: { fillColor: [20, 120, 90] },
     });
     doc.save(`print-list-${Date.now()}.pdf`);
@@ -72,13 +79,14 @@ export default function PrintCenter() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members..." className="pl-9" />
         </div>
-        <Select value={status} onValueChange={setStatus}>
+        <Select value={status} onValueChange={(v) => setStatus(v as PrintStatusFilter)}>
           <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All status</SelectItem>
             <SelectItem value="paid">Paid</SelectItem>
             <SelectItem value="unpaid">Unpaid</SelectItem>
             <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="hold">Hold Ones</SelectItem>
           </SelectContent>
         </Select>
         <Button variant="outline" onClick={toggleAll}><ListChecks className="mr-1.5 h-4 w-4" /> Toggle all</Button>
