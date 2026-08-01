@@ -70,10 +70,14 @@ export async function generateReceiptPDF(member: Member, settings: OrgSettings) 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
   doc.text("Receipt No:", 40, 132);
-  doc.text("Date:", 40, 150);
+  doc.text("Date:", 40, 148);
+  doc.text("Payment Mode:", 40, 164);
+
   doc.setFont("helvetica", "normal");
-  doc.text(receiptNo, 110, 132);
-  doc.text(new Date().toLocaleDateString(), 110, 150);
+  const modeText = (member.payment_mode ?? "cash") === "account" ? "Account" : "Cash";
+  doc.text(receiptNo, 115, 132);
+  doc.text(new Date().toLocaleDateString(), 115, 148);
+  doc.text(modeText, 115, 164);
 
   doc.setFont("helvetica", "bold");
   doc.text("For Period:", pageW / 2, 132);
@@ -81,29 +85,29 @@ export async function generateReceiptPDF(member: Member, settings: OrgSettings) 
   doc.text(`${MONTHS[member.month - 1]} ${member.year}`, pageW / 2 + 70, 132);
 
   doc.setFont("helvetica", "bold");
-  doc.text("Status:", pageW / 2, 150);
+  doc.text("Status:", pageW / 2, 148);
   doc.setFont("helvetica", "normal");
-  doc.text(member.status.toUpperCase(), pageW / 2 + 70, 150);
+  doc.text(member.status.toUpperCase(), pageW / 2 + 70, 148);
 
   // Member details box
   doc.setDrawColor(220);
-  doc.roundedRect(40, 170, pageW - 80, 70, 6, 6, "S");
+  doc.roundedRect(40, 178, pageW - 80, 68, 6, 6, "S");
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text("Received from:", 50, 188);
+  doc.text("Received from:", 50, 196);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(12);
-  doc.text(member.name, 50, 208);
+  doc.text(member.name, 50, 214);
   doc.setFontSize(10);
-  doc.text(member.phone || "—", 50, 224);
+  doc.text(member.phone || "—", 50, 230);
 
   // Amount
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text("Amount", pageW - 160, 188);
+  doc.text("Amount", pageW - 160, 196);
   doc.setFontSize(20);
   doc.setTextColor(20, 120, 90);
-  doc.text(formatPdfAmount(member.amount), pageW - 50, 220, { align: "right" });
+  doc.text(formatPdfAmount(member.amount), pageW - 50, 226, { align: "right" });
   doc.setTextColor(30, 30, 30);
 
   // QR

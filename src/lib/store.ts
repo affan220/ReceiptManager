@@ -1,7 +1,8 @@
-// Data model types. Storage is now local IndexedDB (see DatabaseService.ts).
+// Shared data model types.
 // Schema kept stable so a Python/Kivy mirror app can use the same field names.
 
 export type MemberStatus = "paid" | "unpaid" | "pending";
+export type PaymentMode = "cash" | "account";
 
 export interface Member {
   id: string;
@@ -9,6 +10,7 @@ export interface Member {
   phone: string;
   amount: number;
   status: MemberStatus;
+  payment_mode?: PaymentMode;
   month: number;
   year: number;
   hold: boolean;
@@ -57,7 +59,7 @@ export function initialsOf(name: string): string {
     .join("") || "?";
 }
 
-// CSV / TXT parsing (header: name,phone,amount,status,month,year)
+// CSV / TXT parsing (header: name,phone,amount,status,payment_mode,month,year)
 export function parseDelimited(text: string): Partial<Member>[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length);
   if (!lines.length) return [];
@@ -68,14 +70,18 @@ export function parseDelimited(text: string): Partial<Member>[] {
     const row: Record<string, string> = {};
     header.forEach((h, i) => (row[h] = (cols[i] ?? "").trim()));
     const status = (row.status?.toLowerCase() as MemberStatus) || "unpaid";
+    const rawMode = (row.payment_mode || row.paymentmode || row.mode || "cash").toLowerCase();
+    const payment_mode: PaymentMode = rawMode === "account" ? "account" : "cash";
     return {
       name: row.name || row.member || "Unknown",
       phone: row.phone || row.mobile || "",
       amount: Number(row.amount || 0),
       status: ["paid", "unpaid", "pending"].includes(status) ? status : "unpaid",
+      payment_mode,
       month: Number(row.month) || new Date().getMonth() + 1,
       year: Number(row.year) || new Date().getFullYear(),
       months_pending: Number(row.months_pending || row.pending || 0),
     };
   });
 }
+

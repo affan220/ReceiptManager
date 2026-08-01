@@ -1,64 +1,15 @@
-import { Member, OrgSettings, defaultSettings } from "./store";
-import { normalizeUsername } from "./auth";
+import { Member, OrgSettings, defaultSettings, PaymentMode } from "./store";
+import { generateUsernameSuggestions, normalizeUsername } from "./auth";
 
-const DB_NAME = "MasjidReceiptManagerDB";
-const CURRENT_USER_KEY = "MasjidReceiptManagerCurrentUser";
-
-type UserRow = {
-  id: number;
-  username: string;
-  passwordHash: string;
-  createdAt: string;
-};
-
-type MemberRow = {
-  id: number;
-  userId: string;
-  name: string;
-  phone: string;
-  address: string;
-  monthlyFee: number;
-  pendingMonths: number;
-  holdStatus: boolean;
-  status: string;
-  month: number;
-  year: number;
-  months_pending: number;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type SettingsRow = {
-  id: number;
-  userId: string;
-  data: Partial<OrgSettings> & { profile?: { full_name?: string; organization?: string } };
-  createdAt: string;
-  updatedAt: string;
-};
-
-type ReceiptRow = {
-  id: number;
-  userId: string;
-  memberId: string;
-  month: number;
-  year: number;
-  amount: number;
-  status: string;
-  receiptNo: string;
-  createdAt: string;
-};
-
-type AppState = {
-  nextIds: {
-    users: number;
-    members: number;
-    settings: number;
-    receipts: number;
-  };
-  users: UserRow[];
-  members: MemberRow[];
-  settings: SettingsRow[];
-  receipts: ReceiptRow[];
+export type ProfileRow = {
+  id: string;
+  full_name: string | null;
+  organization: string | null;
+  phone: string | null;
+  address: string | null;
+  username: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export interface AuthUser {
@@ -72,230 +23,57 @@ export interface Receipt {
   id: string;
   userId: string;
   memberId: string;
+  receiptSeq: number;
+  receiptNo: string;
   month: number;
   year: number;
   amount: number;
   status: string;
-  receiptNo: string;
   createdAt: string;
 }
 
-const EMPTY_STATE: AppState = {
-  nextIds: {
-    users: 1,
-    members: 1,
-    settings: 1,
-    receipts: 1,
-  },
-  users: [],
-  members: [],
-  settings: [],
-  receipts: [],
+interface StoredUser {
+  id: string;
+  username: string;
+  password?: string;
+  createdAt: string;
+}
+
+const STORAGE_KEYS = {
+  USERS: "receipt_manager_users",
+  CURRENT_USER_ID: "receipt_manager_current_user_id",
+  MEMBERS_PREFIX: "receipt_manager_members_",
+  SETTINGS_PREFIX: "receipt_manager_settings_",
+  PROFILES_PREFIX: "receipt_manager_profiles_",
+  RECEIPTS_PREFIX: "receipt_manager_receipts_",
+  SEQ_PREFIX: "receipt_manager_seq_",
 };
 
-function isBrowser() {
-  return typeof window !== "undefined" && typeof localStorage !== "undefined";
-}
-
-function cloneState(state: AppState): AppState {
-  return {
-    nextIds: { ...state.nextIds },
-    users: [...state.users],
-    members: [...state.members],
-    settings: [...state.settings],
-    receipts: [...state.receipts],
-  };
-}
-
-function readState(): AppState {
-  if (!isBrowser()) {
-    throw new Error("Local storage is only available in the browser.");
-  }
-
-  const raw = localStorage.getItem(DB_NAME);
-  if (!raw) {
-    return cloneState(EMPTY_STATE);
-  }
-
+function getItem<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
   try {
-    const parsed = JSON.parse(raw) as Partial<AppState>;
-    return {
-      nextIds: {
-        users: parsed.nextIds?.users ?? EMPTY_STATE.nextIds.users,
-        members: parsed.nextIds?.members ?? EMPTY_STATE.nextIds.members,
-        settings: parsed.nextIds?.settings ?? EMPTY_STATE.nextIds.settings,
-        receipts: parsed.nextIds?.receipts ?? EMPTY_STATE.nextIds.receipts,
-      },
-      users: Array.isArray(parsed.users) ? parsed.users : [],
-      members: Array.isArray(parsed.members) ? parsed.members : [],
-      settings: Array.isArray(parsed.settings) ? parsed.settings : [],
-      receipts: Array.isArray(parsed.receipts) ? parsed.receipts : [],
-    };
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {
-    return cloneState(EMPTY_STATE);
+    return fallback;
   }
 }
 
-function writeState(state: AppState) {
-  if (!isBrowser()) {
-    throw new Error("Local storage is only available in the browser.");
-  }
-
-  localStorage.setItem(DB_NAME, JSON.stringify(state));
-}
-
-function updateState(mutator: (state: AppState) => void) {
-  const state = readState();
-  mutator(state);
-  writeState(state);
-  return state;
-}
-
-function nextId(state: AppState, key: keyof AppState["nextIds"]) {
-  const id = state.nextIds[key];
-  state.nextIds[key] += 1;
-  return id;
-}
-
-function bytesToHex(bytes: Uint8Array) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function rotr(value: number, shift: number) {
-  return (value >>> shift) | (value << (32 - shift));
-}
-
-function sha256Fallback(data: Uint8Array) {
-  const K = [
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-  ];
-
-  const H = [
-    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-  ];
-
-  const paddedLength = Math.ceil((data.length + 9) / 64) * 64;
-  const buffer = new Uint8Array(paddedLength);
-  buffer.set(data);
-  buffer[data.length] = 0x80;
-
-  const view = new DataView(buffer.buffer);
-  const bitLength = data.length * 8;
-  view.setUint32(buffer.length - 8, Math.floor(bitLength / 0x100000000), false);
-  view.setUint32(buffer.length - 4, bitLength >>> 0, false);
-
-  const words = new Uint32Array(64);
-
-  for (let offset = 0; offset < buffer.length; offset += 64) {
-    for (let i = 0; i < 16; i += 1) {
-      words[i] = view.getUint32(offset + i * 4, false);
-    }
-
-    for (let i = 16; i < 64; i += 1) {
-      const s0 = rotr(words[i - 15], 7) ^ rotr(words[i - 15], 18) ^ (words[i - 15] >>> 3);
-      const s1 = rotr(words[i - 2], 17) ^ rotr(words[i - 2], 19) ^ (words[i - 2] >>> 10);
-      words[i] = (words[i - 16] + s0 + words[i - 7] + s1) >>> 0;
-    }
-
-    let [a, b, c, d, e, f, g, h] = H;
-
-    for (let i = 0; i < 64; i += 1) {
-      const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-      const ch = (e & f) ^ (~e & g);
-      const temp1 = (h + s1 + ch + K[i] + words[i]) >>> 0;
-      const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-      const maj = (a & b) ^ (a & c) ^ (b & c);
-      const temp2 = (s0 + maj) >>> 0;
-
-      h = g;
-      g = f;
-      f = e;
-      e = (d + temp1) >>> 0;
-      d = c;
-      c = b;
-      b = a;
-      a = (temp1 + temp2) >>> 0;
-    }
-
-    H[0] = (H[0] + a) >>> 0;
-    H[1] = (H[1] + b) >>> 0;
-    H[2] = (H[2] + c) >>> 0;
-    H[3] = (H[3] + d) >>> 0;
-    H[4] = (H[4] + e) >>> 0;
-    H[5] = (H[5] + f) >>> 0;
-    H[6] = (H[6] + g) >>> 0;
-    H[7] = (H[7] + h) >>> 0;
-  }
-
-  return H.map((value) => value.toString(16).padStart(8, "0")).join("");
-}
-
-async function hashPassword(password: string) {
-  if (typeof window === "undefined") {
-    throw new Error("Password hashing is only available in the browser.");
-  }
-
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const subtle = window.crypto?.subtle;
-
-  if (subtle) {
-    const hashBuffer = await subtle.digest("SHA-256", data);
-    return bytesToHex(new Uint8Array(hashBuffer));
-  }
-
-  return sha256Fallback(data);
-}
-
-function toAuthUser(row: UserRow): AuthUser {
-  return {
-    id: String(row.id),
-    username: row.username,
-    createdAt: row.createdAt,
-    user_metadata: { username: row.username },
-  };
-}
-
-function toMember(row: MemberRow): Member {
-  return {
-    id: String(row.id),
-    name: row.name,
-    phone: row.phone,
-    amount: row.monthlyFee,
-    status: row.status as Member["status"],
-    month: row.month,
-    year: row.year,
-    hold: row.holdStatus,
-    months_pending: row.months_pending,
-    created_at: row.createdAt,
-    updated_at: row.updatedAt,
-  };
-}
-
-function normalizeUserId(userId: string) {
-  return String(userId);
-}
-
-export async function initializeDatabase() {
+function setItem<T>(key: string, value: T): void {
+  if (typeof window === "undefined") return;
   try {
-    if (!isBrowser()) {
-      throw new Error("Local storage is only available in the browser.");
-    }
-
-    if (!localStorage.getItem(DB_NAME)) {
-      writeState(cloneState(EMPTY_STATE));
-    }
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch (error) {
-    console.error("Local database initialization failed:", error);
-    throw new Error("Could not initialize local database. Please refresh or try a different browser.");
+    console.error("[LocalStorage] Error saving key:", key, error);
+  }
+}
+
+function removeItem(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch (error) {
+    console.error("[LocalStorage] Error removing key:", key, error);
   }
 }
 
@@ -305,166 +83,181 @@ function dispatchAuthStateChange() {
   }
 }
 
-export async function createUser(username: string, password: string) {
+function mapAuthUser(user: StoredUser): AuthUser {
+  return {
+    id: user.id,
+    username: user.username,
+    createdAt: user.createdAt,
+    user_metadata: { username: user.username },
+  };
+}
+
+export async function initializeDatabase(): Promise<void> {
+  return Promise.resolve();
+}
+
+export async function createUser(username: string, password: string): Promise<AuthUser> {
   const normalizedUsername = normalizeUsername(username);
   if (!normalizedUsername) {
     throw new Error("Username is required.");
   }
+  if (!password) {
+    throw new Error("Password is required.");
+  }
 
-  await initializeDatabase();
-  const existing = readState().users.find((user) => user.username === normalizedUsername);
+  const users = getItem<StoredUser[]>(STORAGE_KEYS.USERS, []);
+  const existing = users.find((u) => u.username.toLowerCase() === normalizedUsername.toLowerCase());
   if (existing) {
     throw new Error("Username already taken.");
   }
 
-  const passwordHash = await hashPassword(password);
-  const createdAt = new Date().toISOString();
-  const user = updateState((state) => {
-    const id = nextId(state, "users");
-    state.users.push({ id, username: normalizedUsername, passwordHash, createdAt });
-  }).users.at(-1);
+  const now = new Date().toISOString();
+  const newUser: StoredUser = {
+    id: "usr_" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
+    username: normalizedUsername,
+    password,
+    createdAt: now,
+  };
 
-  if (!user) {
-    throw new Error("Could not create user.");
-  }
+  users.push(newUser);
+  setItem(STORAGE_KEYS.USERS, users);
+  setItem(STORAGE_KEYS.CURRENT_USER_ID, newUser.id);
 
-  const authUser = toAuthUser(user);
-  localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(authUser));
   dispatchAuthStateChange();
-  return authUser;
+  return mapAuthUser(newUser);
 }
 
-export async function login(username: string, password: string) {
+export async function login(username: string, password: string): Promise<AuthUser> {
   const normalizedUsername = normalizeUsername(username);
   if (!normalizedUsername) {
     throw new Error("Username is required.");
   }
 
-  await initializeDatabase();
-  const row = readState().users.find((user) => user.username === normalizedUsername);
-  if (!row) {
+  const users = getItem<StoredUser[]>(STORAGE_KEYS.USERS, []);
+  const user = users.find(
+    (u) => u.username.toLowerCase() === normalizedUsername.toLowerCase() && u.password === password
+  );
+
+  if (!user) {
     throw new Error("Invalid username or password.");
   }
 
-  const hash = await hashPassword(password);
-  if (hash !== row.passwordHash) {
-    throw new Error("Invalid username or password.");
-  }
-
-  const user = toAuthUser(row);
-  localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+  setItem(STORAGE_KEYS.CURRENT_USER_ID, user.id);
   dispatchAuthStateChange();
-  return user;
+  return mapAuthUser(user);
 }
 
-export async function getCurrentUser() {
-  if (typeof localStorage === "undefined") return null;
-  const raw = localStorage.getItem(CURRENT_USER_KEY);
-  if (!raw) return null;
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  const currentUserId = getItem<string | null>(STORAGE_KEYS.CURRENT_USER_ID, null);
+  if (!currentUserId) return null;
 
-  try {
-    const user = JSON.parse(raw) as AuthUser;
-    if (!user?.id || !user?.username) {
-      localStorage.removeItem(CURRENT_USER_KEY);
-      return null;
-    }
-    return user;
-  } catch {
-    localStorage.removeItem(CURRENT_USER_KEY);
-    return null;
-  }
+  const users = getItem<StoredUser[]>(STORAGE_KEYS.USERS, []);
+  const user = users.find((u) => u.id === currentUserId);
+  if (!user) return null;
+
+  return mapAuthUser(user);
 }
 
-export async function logout() {
-  if (typeof localStorage !== "undefined") {
-    localStorage.removeItem(CURRENT_USER_KEY);
-    dispatchAuthStateChange();
-  }
+export async function logout(): Promise<void> {
+  removeItem(STORAGE_KEYS.CURRENT_USER_ID);
+  dispatchAuthStateChange();
 }
 
-export async function addMember(userId: string, member: Partial<Member>) {
-  await initializeDatabase();
+export async function loadProfile(userId: string): Promise<ProfileRow | null> {
+  const profile = getItem<ProfileRow | null>(STORAGE_KEYS.PROFILES_PREFIX + userId, null);
+  if (profile) return profile;
+
+  const users = getItem<StoredUser[]>(STORAGE_KEYS.USERS, []);
+  const user = users.find((u) => u.id === userId);
   const now = new Date().toISOString();
-  const saved = updateState((state) => {
-    const id = nextId(state, "members");
-    state.members.push({
-      id,
-      userId: normalizeUserId(userId),
-      name: member.name ?? "",
-      phone: member.phone ?? "",
-      address: "",
-      monthlyFee: Number(member.amount ?? 0),
-      pendingMonths: Number(member.months_pending ?? 0),
-      holdStatus: Boolean(member.hold),
-      status: member.status ?? "unpaid",
-      month: Number(member.month ?? new Date().getMonth() + 1),
-      year: Number(member.year ?? new Date().getFullYear()),
-      months_pending: Number(member.months_pending ?? 0),
-      createdAt: now,
-      updatedAt: now,
-    });
-  }).members.at(-1);
 
-  if (!saved) {
-    throw new Error("Could not add member.");
-  }
-
-  return toMember(saved);
+  return {
+    id: userId,
+    full_name: null,
+    organization: null,
+    phone: null,
+    address: null,
+    username: user?.username ?? null,
+    created_at: user?.createdAt ?? now,
+    updated_at: now,
+  };
 }
 
-export async function updateMember(id: string, userId: string, patch: Partial<Member>) {
-  await initializeDatabase();
-  const state = updateState((draft) => {
-    const record = draft.members.find((item) => item.id === Number(id));
-    if (!record || record.userId !== normalizeUserId(userId)) {
-      return;
-    }
+export async function addMember(userId: string, member: Partial<Member>): Promise<Member> {
+  const now = new Date().toISOString();
+  const members = getItem<Member[]>(STORAGE_KEYS.MEMBERS_PREFIX + userId, []);
+  const mode: PaymentMode = member.payment_mode === "account" ? "account" : "cash";
 
-    record.name = patch.name ?? record.name;
-    record.phone = patch.phone ?? record.phone;
-    record.monthlyFee = patch.amount !== undefined ? Number(patch.amount) : record.monthlyFee;
-    record.status = patch.status ?? record.status;
-    record.month = patch.month !== undefined ? Number(patch.month) : record.month;
-    record.year = patch.year !== undefined ? Number(patch.year) : record.year;
-    record.holdStatus = patch.hold !== undefined ? Boolean(patch.hold) : record.holdStatus;
-    record.months_pending = patch.months_pending !== undefined ? Number(patch.months_pending) : record.months_pending;
-    record.updatedAt = new Date().toISOString();
-  });
+  const newMember: Member = {
+    id: "mem_" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
+    name: member.name ?? "",
+    phone: member.phone ?? "",
+    amount: Number(member.amount ?? 0),
+    status: (member.status ?? "unpaid") as Member["status"],
+    payment_mode: mode,
+    month: Number(member.month ?? new Date().getMonth() + 1),
+    year: Number(member.year ?? new Date().getFullYear()),
+    hold: Boolean(member.hold),
+    months_pending: Number(member.months_pending ?? 0),
+    created_at: now,
+    updated_at: now,
+  };
 
-  const updated = state.members.find((item) => item.id === Number(id));
-  if (!updated || updated.userId !== normalizeUserId(userId)) {
-    throw new Error("Member not found.");
-  }
-  return toMember(updated);
+  members.unshift(newMember);
+  setItem(STORAGE_KEYS.MEMBERS_PREFIX + userId, members);
+  return newMember;
 }
 
-export async function deleteMember(id: string, userId: string) {
-  await initializeDatabase();
-  const existing = readState().members.find((item) => item.id === Number(id) && item.userId === normalizeUserId(userId));
-  if (!existing) {
+export async function updateMember(id: string, userId: string, patch: Partial<Member>): Promise<Member> {
+  const members = getItem<Member[]>(STORAGE_KEYS.MEMBERS_PREFIX + userId, []);
+  const index = members.findIndex((m) => m.id === id);
+
+  if (index === -1) {
     throw new Error("Member not found.");
   }
 
-  updateState((draft) => {
-    const index = draft.members.findIndex((item) => item.id === Number(id) && item.userId === normalizeUserId(userId));
-    if (index >= 0) {
-      draft.members.splice(index, 1);
-    }
-  });
+  const existing = members[index];
+  const mode: PaymentMode = patch.payment_mode !== undefined
+    ? (patch.payment_mode === "account" ? "account" : "cash")
+    : (existing.payment_mode === "account" ? "account" : "cash");
+
+  const updated: Member = {
+    ...existing,
+    ...patch,
+    payment_mode: mode,
+    amount: patch.amount !== undefined ? Number(patch.amount) : existing.amount,
+    month: patch.month !== undefined ? Number(patch.month) : existing.month,
+    year: patch.year !== undefined ? Number(patch.year) : existing.year,
+    hold: patch.hold !== undefined ? Boolean(patch.hold) : existing.hold,
+    months_pending: patch.months_pending !== undefined ? Number(patch.months_pending) : existing.months_pending,
+    updated_at: new Date().toISOString(),
+  };
+
+  members[index] = updated;
+  setItem(STORAGE_KEYS.MEMBERS_PREFIX + userId, members);
+  return updated;
 }
 
-export async function getMembers(userId: string) {
-  await initializeDatabase();
-  const raw = readState().members.filter((item) => item.userId === normalizeUserId(userId));
-  return raw.map(toMember).sort((a, b) => (a.created_at > b.created_at ? -1 : 1));
+export async function deleteMember(id: string, userId: string): Promise<void> {
+  const members = getItem<Member[]>(STORAGE_KEYS.MEMBERS_PREFIX + userId, []);
+  const filtered = members.filter((m) => m.id !== id);
+  setItem(STORAGE_KEYS.MEMBERS_PREFIX + userId, filtered);
 }
 
-export async function searchMembers(userId: string, query: string) {
+export async function getMembers(userId: string): Promise<Member[]> {
+  const members = getItem<Member[]>(STORAGE_KEYS.MEMBERS_PREFIX + userId, []);
+  return [...members].map((m) => ({
+    ...m,
+    payment_mode: (m.payment_mode === "account" ? "account" : "cash") as PaymentMode,
+  })).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
+export async function searchMembers(userId: string, query: string): Promise<Member[]> {
   const normalized = query.trim().toLowerCase();
-  if (!normalized) return getMembers(userId);
   const all = await getMembers(userId);
+  if (!normalized) return all;
   return all.filter((member) =>
-    `${member.name} ${member.phone}`.toLowerCase().includes(normalized),
+    `${member.name} ${member.phone} ${member.payment_mode ?? "cash"}`.toLowerCase().includes(normalized)
   );
 }
 
@@ -481,85 +274,117 @@ export async function getDashboardStats(userId: string) {
   const outstanding = members
     .filter((item) => item.status !== "paid")
     .reduce((sum, item) => sum + item.amount * Math.max(1, item.months_pending || 1), 0);
+  const cashReceived = members
+    .filter((item) => item.status === "paid" && (item.payment_mode ?? "cash") === "cash")
+    .reduce((sum, item) => sum + item.amount, 0);
+  const accountReceived = members
+    .filter((item) => item.status === "paid" && item.payment_mode === "account")
+    .reduce((sum, item) => sum + item.amount, 0);
 
-  return { total, paid, unpaid, pending, monthly, yearly, outstanding };
+  return { total, paid, unpaid, pending, monthly, yearly, outstanding, cashReceived, accountReceived };
 }
 
-export async function saveSettings(userId: string, data: Partial<OrgSettings> & { profile?: { full_name?: string; organization?: string } }) {
-  await initializeDatabase();
-  const now = new Date().toISOString();
-  updateState((state) => {
-    const existing = state.settings.find((item) => item.userId === normalizeUserId(userId));
-    if (existing) {
-      existing.data = data;
-      existing.updatedAt = now;
-      return;
-    }
 
-    state.settings.push({
-      id: nextId(state, "settings"),
-      userId: normalizeUserId(userId),
-      data,
-      createdAt: now,
-      updatedAt: now,
-    });
-  });
+export async function saveSettings(
+  userId: string,
+  data: Partial<OrgSettings> & { profile?: { full_name?: string; organization?: string } }
+): Promise<void> {
+  const existingSettings = (await loadSettings(userId)) ?? defaultSettings;
+  const updatedSettings: OrgSettings = {
+    name: data.name ?? existingSettings.name,
+    tagline: data.tagline ?? existingSettings.tagline,
+    address: data.address ?? existingSettings.address,
+    phone: data.phone ?? existingSettings.phone,
+    email: data.email ?? existingSettings.email,
+    logoDataUrl: data.logoDataUrl !== undefined ? data.logoDataUrl : existingSettings.logoDataUrl,
+    signatureLabel: data.signatureLabel ?? existingSettings.signatureLabel,
+    receiptPrefix: data.receiptPrefix ?? existingSettings.receiptPrefix,
+    currency: data.currency ?? existingSettings.currency,
+  };
+
+  setItem(STORAGE_KEYS.SETTINGS_PREFIX + userId, updatedSettings);
+
+  if (data.profile) {
+    const existingProfile = await loadProfile(userId);
+    const updatedProfile: ProfileRow = {
+      id: userId,
+      full_name: data.profile.full_name ?? existingProfile?.full_name ?? null,
+      organization: data.profile.organization ?? data.name ?? existingProfile?.organization ?? null,
+      phone: existingProfile?.phone ?? null,
+      address: existingProfile?.address ?? null,
+      username: existingProfile?.username ?? null,
+      created_at: existingProfile?.created_at ?? new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    setItem(STORAGE_KEYS.PROFILES_PREFIX + userId, updatedProfile);
+  }
 }
 
-export async function loadSettings(userId: string) {
-  await initializeDatabase();
-  const record = readState().settings.find((item) => item.userId === normalizeUserId(userId));
-  return record?.data ?? null;
+export async function loadSettings(userId: string): Promise<OrgSettings | null> {
+  return getItem<OrgSettings | null>(STORAGE_KEYS.SETTINGS_PREFIX + userId, null);
 }
 
-export async function saveReceipt(userId: string, memberId: string, month: number, year: number, amount: number, status: string) {
-  await initializeDatabase();
+export async function suggestAvailableUsernames(username: string, limit = 5): Promise<string[]> {
+  const normalized = normalizeUsername(username);
+  if (!normalized) return [];
+
+  const users = getItem<StoredUser[]>(STORAGE_KEYS.USERS, []);
+  const taken = new Set(users.map((u) => u.username.toLowerCase()));
+
+  const suggestions = generateUsernameSuggestions(normalized, limit * 3);
+  return suggestions.filter((name) => !taken.has(name.toLowerCase())).slice(0, limit);
+}
+
+export async function saveReceipt(
+  userId: string,
+  memberId: string,
+  month: number,
+  year: number,
+  amount: number,
+  status: string
+): Promise<string> {
   const settings = await loadSettings(userId);
   const prefix = settings?.receiptPrefix ?? defaultSettings.receiptPrefix;
-  const state = readState();
-  const receiptsForUser = state.receipts.filter((item) => item.userId === normalizeUserId(userId));
-  const seq = receiptsForUser.reduce((max, item) => Math.max(max, item.id), 0) + 1;
-  const receiptNo = `${prefix}-${year}-${String(seq).padStart(5, "0")}`;
-  const createdAt = new Date().toISOString();
-  updateState((draft) => {
-    draft.receipts.push({
-      id: nextId(draft, "receipts"),
-      userId: normalizeUserId(userId),
-      memberId,
-      month,
-      year,
-      amount,
-      status,
-      receiptNo,
-      createdAt,
-    });
-  });
+
+  const currentSeq = getItem<number>(STORAGE_KEYS.SEQ_PREFIX + userId, 0);
+  const receiptSeq = currentSeq + 1;
+  setItem(STORAGE_KEYS.SEQ_PREFIX + userId, receiptSeq);
+
+  const receiptNo = `${prefix}-${year}-${String(receiptSeq).padStart(5, "0")}`;
+  const now = new Date().toISOString();
+
+  const receipts = getItem<Receipt[]>(STORAGE_KEYS.RECEIPTS_PREFIX + userId, []);
+  const newReceipt: Receipt = {
+    id: "rcpt_" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
+    userId,
+    memberId,
+    receiptSeq,
+    receiptNo,
+    month,
+    year,
+    amount,
+    status,
+    createdAt: now,
+  };
+
+  receipts.unshift(newReceipt);
+  setItem(STORAGE_KEYS.RECEIPTS_PREFIX + userId, receipts);
+
   return receiptNo;
 }
 
-export async function getReceipts(userId: string) {
-  await initializeDatabase();
-  const raw = readState().receipts.filter((item) => item.userId === normalizeUserId(userId));
-  return raw
-    .map((item) => ({
-      ...item,
-      id: String(item.id),
-    }))
-    .sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
+export async function getReceipts(userId: string): Promise<Receipt[]> {
+  const receipts = getItem<Receipt[]>(STORAGE_KEYS.RECEIPTS_PREFIX + userId, []);
+  return [...receipts].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
-export async function updatePassword(userId: string, password: string) {
-  await initializeDatabase();
-  const record = readState().users.find((item) => item.id === Number(userId));
-  if (!record) {
+export async function updatePassword(userId: string, password: string): Promise<void> {
+  const users = getItem<StoredUser[]>(STORAGE_KEYS.USERS, []);
+  const userIndex = users.findIndex((u) => u.id === userId);
+  if (userIndex === -1) {
     throw new Error("User not found.");
   }
-  const passwordHash = await hashPassword(password);
-  updateState((draft) => {
-    const target = draft.users.find((item) => item.id === Number(userId));
-    if (!target) {
-      return;
-    }
-    target.passwordHash = passwordHash;
-  });
+
+  users[userIndex].password = password;
+  setItem(STORAGE_KEYS.USERS, users);
 }

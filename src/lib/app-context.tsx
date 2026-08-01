@@ -2,7 +2,16 @@ import { createContext, useContext, useEffect, useMemo, useState, ReactNode, use
 import { Member, OrgSettings, defaultSettings } from "./store";
 import { useAuth } from "./auth-context";
 import { toast } from "sonner";
-import { initializeDatabase, addMember as dbAddMember, updateMember as dbUpdateMember, deleteMember as dbDeleteMember, getMembers as dbGetMembers, saveSettings as dbSaveSettings, loadSettings as dbLoadSettings } from "./DatabaseService";
+import {
+  initializeDatabase,
+  addMember as dbAddMember,
+  updateMember as dbUpdateMember,
+  deleteMember as dbDeleteMember,
+  getMembers as dbGetMembers,
+  saveSettings as dbSaveSettings,
+  loadSettings as dbLoadSettings,
+  loadProfile as dbLoadProfile,
+} from "./DatabaseService";
 
 interface Profile {
   id: string;
@@ -10,6 +19,7 @@ interface Profile {
   organization: string | null;
   phone: string | null;
   address: string | null;
+  username?: string | null;
 }
 
 interface AppCtx {
@@ -86,9 +96,13 @@ function sanitizeMemberPatch(patch: Partial<Member>) {
   if (cleaned.year !== undefined) cleaned.year = Number(cleaned.year);
   if (cleaned.hold !== undefined) cleaned.hold = Boolean(cleaned.hold);
   if (cleaned.months_pending !== undefined) cleaned.months_pending = Number(cleaned.months_pending);
+  if (cleaned.payment_mode !== undefined) {
+    cleaned.payment_mode = cleaned.payment_mode === "account" ? "account" : "cash";
+  }
 
   return cleaned as Partial<Member>;
 }
+
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -109,9 +123,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       await initializeDatabase();
-      const [membersList, savedSettings] = await Promise.all([
+      const [membersList, savedSettings, savedProfileResult] = await Promise.all([
         dbGetMembers(user.id),
         dbLoadSettings(user.id),
+        dbLoadProfile(user.id).catch(() => null),
       ]);
 
       setMembers(membersList);
@@ -121,12 +136,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await dbSaveSettings(user.id, defaultSettings);
         setSettings(defaultSettings);
       }
-      setProfile({
+      setProfile(savedProfileResult ?? {
         id: user.id,
         full_name: null,
         organization: null,
         phone: null,
         address: null,
+        username: user.user_metadata?.username ?? user.username ?? null,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -177,8 +193,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateMember = useCallback(async (id: string, patch: Partial<Member>) => {
     if (!user) return;
     try {
-      await dbUpdateMember(id, user.id, sanitizeMemberPatch(patch));
-      setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch, updated_at: new Date().toISOString() } : m)));
+      const updated = await dbUpdateMember(id, user.id, sanitizeMemberPatch(patch));
+      setMembers((prev) => prev.map((m) => (m.id === id ? updated : m)));
     } catch (error) {
       console.error("[members] update error:", error);
       toast.error(error instanceof Error ? error.message : "Could not update member.");

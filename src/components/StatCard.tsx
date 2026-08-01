@@ -6,7 +6,7 @@ interface Props {
   value: string | number;
   hint?: string;
   icon: LucideIcon;
-  tone?: "primary" | "success" | "warning" | "destructive" | "accent" | "muted";
+  tone?: "primary" | "success" | "warning" | "destructive" | "accent" | "muted" | "info";
 }
 
 const toneMap: Record<NonNullable<Props["tone"]>, string> = {
@@ -16,7 +16,9 @@ const toneMap: Record<NonNullable<Props["tone"]>, string> = {
   destructive: "bg-destructive/10 text-destructive",
   accent: "bg-accent/10 text-accent",
   muted: "bg-muted text-muted-foreground",
+  info: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
 };
+
 
 export function StatCard({ label, value, hint, icon: Icon, tone = "primary" }: Props) {
   return (

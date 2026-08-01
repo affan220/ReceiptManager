@@ -100,7 +100,7 @@ export function Sidebar({ onNavigate, onToggle }: { onNavigate?: () => void; onT
 
       <div className="border-t border-sidebar-border px-5 py-3 text-[11px] text-sidebar-foreground/55">
         <div className="flex items-center justify-between">
-          <span>v{APP_VERSION}</span>
+          <span>version 1.0.1 </span>
           <span className="flex items-center gap-1"><Moon className="h-3 w-3" /> DEVELOPED BY AFFAN ANSARI </span>
         </div>
       </div>

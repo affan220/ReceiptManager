@@ -32,14 +32,17 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
     if (open) {
       const now = new Date();
       setForm(
-        member ?? {
-          name: "", phone: "", amount: 0, status: "unpaid",
-          month: now.getMonth() + 1, year: now.getFullYear(),
-          hold: false, months_pending: 0,
-        }
+        member
+          ? { ...member, payment_mode: member.payment_mode ?? "cash" }
+          : {
+              name: "", phone: "", amount: 0, status: "unpaid", payment_mode: "cash",
+              month: now.getMonth() + 1, year: now.getFullYear(),
+              hold: false, months_pending: 0,
+            }
       );
     }
   }, [open, member]);
+
 
   const save = async () => {
     if (!form.name?.trim()) {
@@ -151,6 +154,35 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
+              <Label>Payment Mode</Label>
+              <div className="flex rounded-lg border border-input p-1 bg-muted/40">
+                <button
+                  type="button"
+                  disabled={form.status !== "paid"}
+                  onClick={() => setForm({ ...form, payment_mode: "cash" })}
+                  className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    (form.payment_mode ?? "cash") === "cash"
+                      ? "bg-background text-foreground shadow-sm font-semibold"
+                      : "text-muted-foreground hover:text-foreground"
+                  } ${form.status !== "paid" ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  💵 Cash
+                </button>
+                <button
+                  type="button"
+                  disabled={form.status !== "paid"}
+                  onClick={() => setForm({ ...form, payment_mode: "account" })}
+                  className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    form.payment_mode === "account"
+                      ? "bg-background text-foreground shadow-sm font-semibold"
+                      : "text-muted-foreground hover:text-foreground"
+                  } ${form.status !== "paid" ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  🏦 Account
+                </button>
+              </div>
+            </div>
+            <div className="grid gap-2">
               <Label>Months pending</Label>
               <Input
                 type="number"
@@ -159,17 +191,18 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
                 onChange={(e) => setForm({ ...form, months_pending: Number(e.target.value) })}
               />
             </div>
-            <div className="flex items-end justify-between rounded-xl border border-border bg-muted/30 px-3 py-2">
-              <div>
-                <Label className="text-sm">On hold</Label>
-                <p className="text-xs text-muted-foreground">Pause reminders</p>
-              </div>
-              <Switch
-                checked={!!form.hold}
-                onCheckedChange={(v) => setForm({ ...form, hold: v })}
-              />
-            </div>
           </div>
+          <div className="flex items-center justify-between rounded-xl border border-border bg-muted/30 px-3 py-2">
+            <div>
+              <Label className="text-sm">On hold</Label>
+              <p className="text-xs text-muted-foreground">Pause reminders</p>
+            </div>
+            <Switch
+              checked={!!form.hold}
+              onCheckedChange={(v) => setForm({ ...form, hold: v })}
+            />
+          </div>
+
 
           {(pendingMonths > 0 || form.status === "pending") && (
             <div className="grid gap-2 rounded-xl border border-border bg-warning/10 px-4 py-3">

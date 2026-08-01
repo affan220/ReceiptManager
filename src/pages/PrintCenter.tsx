@@ -25,9 +25,9 @@ export default function PrintCenter() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const filtered = useMemo(() => members.filter((m) => {
-    if (status === "hold") return m.hold && (!search || `${m.name} ${m.phone}`.toLowerCase().includes(search.toLowerCase()));
+    if (status === "hold") return m.hold && (!search || `${m.name} ${m.phone} ${m.payment_mode ?? "cash"}`.toLowerCase().includes(search.toLowerCase()));
     if (status !== "all" && m.status !== status) return false;
-    if (search && !`${m.name} ${m.phone}`.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search && !`${m.name} ${m.phone} ${m.payment_mode ?? "cash"}`.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   }), [members, search, status]);
 
@@ -64,8 +64,16 @@ export default function PrintCenter() {
     doc.text(`Printed ${new Date().toLocaleString()}`, 14, 25);
     autoTable(doc, {
       startY: 32,
-      head: [["#", "Name", "Phone", "Amount", "Status", "Period"]],
-      body: list.map((m, i) => [i + 1, m.name, m.phone, formatPdfAmount(m.amount), m.status, `${MONTHS[m.month - 1]} ${m.year}`]),
+      head: [["#", "Name", "Phone", "Amount", "Status", "Payment Mode", "Period"]],
+      body: list.map((m, i) => [
+        i + 1,
+        m.name,
+        m.phone,
+        formatPdfAmount(m.amount),
+        m.status,
+        (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
+        `${MONTHS[m.month - 1]} ${m.year}`,
+      ]),
       headStyles: { fillColor: [20, 120, 90] },
     });
     doc.save(`print-list-${Date.now()}.pdf`);
@@ -77,7 +85,7 @@ export default function PrintCenter() {
       <div className="card-surface p-4 mb-4 flex flex-wrap items-center gap-3">
         <div className="relative min-w-[200px] flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members..." className="pl-9" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search members by name, phone, cash or account..." className="pl-9" />
         </div>
         <Select value={status} onValueChange={(v) => setStatus(v as PrintStatusFilter)}>
           <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
@@ -117,7 +125,7 @@ export default function PrintCenter() {
               <div className="min-w-0 flex-1">
                 <p className="font-medium truncate">{m.name}</p>
                 <p className="text-xs text-muted-foreground truncate">
-                  {settings.currency}{m.amount} · {MONTHS[m.month - 1]} {m.year} · {m.status}
+                  {settings.currency}{m.amount} · {MONTHS[m.month - 1]} {m.year} · {m.status} · {(m.payment_mode ?? "cash") === "account" ? "Account" : "Cash"}
                 </p>
               </div>
             </button>

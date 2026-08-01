@@ -103,9 +103,19 @@ export function MemberCard({ member, onEdit }: Props) {
           </p>
         </div>
         <div className="flex flex-col items-end gap-1.5">
-          <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusStyles[member.status]}`}>
-            {member.status}
-          </span>
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusStyles[member.status]}`}>
+              {member.status}
+            </span>
+            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-wide ${
+              (member.payment_mode ?? "cash") === "account"
+                ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30"
+                : "bg-success/15 text-success border-success/30"
+            }`}>
+              {(member.payment_mode ?? "cash") === "account" ? "🏦 Account" : "💵 Cash"}
+            </span>
+          </div>
+
           {pendingMonths > 0 && (
             <div className="text-[11px] text-muted-foreground text-right leading-tight">
               <div>

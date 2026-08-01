@@ -15,36 +15,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const load = async () => {
+    let alive = true;
+
+    const refresh = async () => {
+      if (alive) {
+        setLoading(true);
+      }
       try {
         const current = await getCurrentUser();
-        setUser(current);
+        if (alive) {
+          setUser(current);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         toast.error(message || "Could not initialize authentication.");
+        if (alive) {
+          setUser(null);
+        }
       } finally {
-        setLoading(false);
+        if (alive) {
+          setLoading(false);
+        }
       }
     };
 
-    const handleAuthChange = async () => {
-      try {
-        const current = await getCurrentUser();
-        setUser(current);
-      } catch {
-        setUser(null);
-      }
+    refresh();
+
+    const handleAuthChange = () => {
+      void refresh();
     };
 
-    load();
-    window.addEventListener("storage", handleAuthChange);
     window.addEventListener("auth-change", handleAuthChange);
 
     return () => {
-      window.removeEventListener("storage", handleAuthChange);
+      alive = false;
       window.removeEventListener("auth-change", handleAuthChange);
     };
   }, []);
+
 
   const signOut = async () => {
     await logout();

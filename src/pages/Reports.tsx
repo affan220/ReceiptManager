@@ -14,7 +14,7 @@ import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 
-type SortKey = "name" | "amount" | "month" | "year" | "status";
+type SortKey = "name" | "amount" | "month" | "year" | "status" | "payment_mode";
 const PAGE_SIZE = 10;
 const ALL_STATUSES: StatusFilterValue[] = ["paid", "unpaid", "pending", "hold"];
 
@@ -40,6 +40,7 @@ export default function Reports() {
   const [search, setSearch] = useState("");
   const [statuses, setStatuses] = useState<StatusFilterValue[]>(ALL_STATUSES);
   const [month, setMonth] = useState("all");
+  const [paymentMode, setPaymentMode] = useState<"all" | "cash" | "account">("all");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
@@ -51,18 +52,19 @@ export default function Reports() {
         : statuses.includes(m.status as StatusFilterValue);
       if (!matchesStatus) return false;
       if (month !== "all" && m.month !== Number(month)) return false;
-      if (search && !`${m.name} ${m.phone}`.toLowerCase().includes(search.toLowerCase())) return false;
+      if (paymentMode !== "all" && (m.payment_mode ?? "cash") !== paymentMode) return false;
+      if (search && !`${m.name} ${m.phone} ${m.payment_mode ?? "cash"}`.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
     list = [...list].sort((a, b) => {
-      const va = a[sortKey] as any;
-      const vb = b[sortKey] as any;
+      const va = (a as any)[sortKey] ?? "";
+      const vb = (b as any)[sortKey] ?? "";
       if (va < vb) return sortDir === "asc" ? -1 : 1;
       if (va > vb) return sortDir === "asc" ? 1 : -1;
       return 0;
     });
     return list;
-  }, [members, search, statuses, month, sortKey, sortDir]);
+  }, [members, search, statuses, month, paymentMode, sortKey, sortDir]);
 
   const paged = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -90,7 +92,7 @@ export default function Reports() {
   const c = settings.currency;
 
   const exportCSV = () => {
-    const headers = ["Name", "Phone", "Amount", "Status", "Month", "Year", "Months Pending", "Monthly Pending", "Pending Total", "Hold"];
+    const headers = ["Name", "Phone", "Amount", "Status", "Payment Mode", "Month", "Year", "Months Pending", "Monthly Pending", "Pending Total", "Hold"];
     const rows = filtered.map((m) => {
       const pending = getPendingAmounts(m);
       return [
@@ -98,6 +100,7 @@ export default function Reports() {
         m.phone,
         m.amount,
         m.status,
+        (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
         MONTHS[m.month - 1],
         m.year,
         pending.pendingMonths,
@@ -125,6 +128,7 @@ export default function Reports() {
         Phone: m.phone,
         Amount: m.amount,
         Status: m.status,
+        "Payment Mode": (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
         Month: MONTHS[m.month - 1],
         Year: m.year,
         "Months Pending": pending.pendingMonths,
@@ -148,7 +152,7 @@ export default function Reports() {
     doc.text(`Generated ${new Date().toLocaleString()}`, 14, 25);
     autoTable(doc, {
       startY: 32,
-      head: [["Name", "Phone", "Amount", "Status", "Period", "Months", "Pending Total"]],
+      head: [["Name", "Phone", "Amount", "Status", "Payment Mode", "Period", "Months", "Pending Total"]],
       body: filtered.map((m) => {
         const pending = getExportPendingAmounts(m);
         return [
@@ -156,6 +160,7 @@ export default function Reports() {
           m.phone,
           formatPdfAmount(m.amount),
           m.status,
+          (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
           `${MONTHS[m.month - 1]} ${m.year}`,
           pending.pendingMonths,
           formatPdfAmount(pending.totalPendingAmount),
@@ -180,11 +185,19 @@ export default function Reports() {
       <div className="card-surface p-4 mb-4 flex flex-wrap items-center gap-3">
         <div className="relative min-w-[200px] flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search members..." className="pl-9" />
+          <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search by name, phone, mode..." className="pl-9" />
         </div>
         <StatusMultiSelect value={statuses} onValueChange={(next) => { setStatuses(next); setPage(1); }} className="w-[180px]" />
+        <Select value={paymentMode} onValueChange={(v) => { setPaymentMode(v as "all" | "cash" | "account"); setPage(1); }}>
+          <SelectTrigger className="w-[160px]"><SelectValue placeholder="Payment Mode" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Payment Modes</SelectItem>
+            <SelectItem value="cash">💵 Cash</SelectItem>
+            <SelectItem value="account">🏦 Account</SelectItem>
+          </SelectContent>
+        </Select>
         <Select value={month} onValueChange={(v) => { setMonth(v); setPage(1); }}>
-          <SelectTrigger className="w-[170px]"><SelectValue placeholder="All months" /></SelectTrigger>
+          <SelectTrigger className="w-[150px]"><SelectValue placeholder="All months" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All months</SelectItem>
             {MONTHS.map((label, index) => (
@@ -207,7 +220,7 @@ export default function Reports() {
             <TableHeader>
               <TableRow>
                 {([
-                  ["name", "Name"], ["amount", "Amount"], ["month", "Month"], ["year", "Year"], ["status", "Status"],
+                  ["name", "Name"], ["amount", "Amount"], ["month", "Month"], ["year", "Year"], ["status", "Status"], ["payment_mode", "Payment Mode"]
                 ] as [SortKey, string][]).map(([k, label]) => (
                   <TableHead key={k}>
                     <button onClick={() => toggleSort(k)} className="inline-flex items-center gap-1 hover:text-foreground">
@@ -224,6 +237,7 @@ export default function Reports() {
             <TableBody>
               {paged.map((m) => {
                 const pending = getPendingAmounts(m);
+                const isAccount = (m.payment_mode ?? "cash") === "account";
                 return (
                   <TableRow key={m.id}>
                     <TableCell className="font-medium">{m.name}</TableCell>
@@ -236,6 +250,13 @@ export default function Reports() {
                         m.status === "unpaid" ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"
                       }`}>{m.status}</span>
                     </TableCell>
+                    <TableCell>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        isAccount ? "bg-blue-500/15 text-blue-600 dark:text-blue-400" : "bg-success/15 text-success"
+                      }`}>
+                        {isAccount ? "🏦 Account" : "💵 Cash"}
+                      </span>
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{m.phone || "—"}</TableCell>
                     <TableCell className="text-right">{pending.pendingMonths}</TableCell>
                     <TableCell className="text-right">RS {pending.monthlyPendingAmount.toLocaleString()}</TableCell>
@@ -244,7 +265,7 @@ export default function Reports() {
                 );
               })}
               {paged.length === 0 && (
-                <TableRow><TableCell colSpan={9} className="text-center py-10 text-muted-foreground">No results</TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} className="text-center py-10 text-muted-foreground">No results</TableCell></TableRow>
               )}
             </TableBody>
           </Table>

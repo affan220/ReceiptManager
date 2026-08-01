@@ -9,7 +9,7 @@ import { Member, MONTHS } from "@/lib/store";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, CheckCircle2, XCircle, Clock, Wallet, TrendingUp, AlertTriangle, Percent, Plus, Search } from "lucide-react";
+import { Users, CheckCircle2, XCircle, Clock, Wallet, TrendingUp, AlertTriangle, Percent, Plus, Search, Building2 } from "lucide-react";
 
 const ALL = "all";
 const HOLD = "hold";
@@ -55,7 +55,7 @@ export default function Dashboard() {
         ? statuses.includes(HOLD as StatusFilterValue) || statuses.includes(m.status as StatusFilterValue)
         : statuses.includes(m.status as StatusFilterValue);
       if (!matchesStatus) return false;
-      if (search && !`${m.name} ${m.phone}`.toLowerCase().includes(search.toLowerCase())) return false;
+      if (search && !`${m.name} ${m.phone} ${m.payment_mode ?? "cash"}`.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
   }, [members, month, year, statuses, search]);
@@ -72,8 +72,14 @@ export default function Dashboard() {
     const outstanding = filtered
       .filter((m) => m.status !== "paid")
       .reduce((s, m) => s + m.amount * Math.max(1, m.months_pending || 1), 0);
+    const cashReceived = filtered
+      .filter((m) => m.status === "paid" && (m.payment_mode ?? "cash") === "cash")
+      .reduce((s, m) => s + m.amount, 0);
+    const accountReceived = filtered
+      .filter((m) => m.status === "paid" && m.payment_mode === "account")
+      .reduce((s, m) => s + m.amount, 0);
     const pct = total ? Math.round((paid / total) * 100) : 0;
-    return { total, paid, unpaid, pending, monthly, yearly, outstanding, pct };
+    return { total, paid, unpaid, pending, monthly, yearly, outstanding, cashReceived, accountReceived, pct };
   }, [filtered, members, year]);
 
   const c = settings.currency;
@@ -100,7 +106,7 @@ export default function Dashboard() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name or phone..."
+            placeholder="Search by name, phone, cash or account..."
             className="pl-9"
           />
         </div>
@@ -125,7 +131,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 mb-6">
         <StatCard label="Total Members" value={stats.total} icon={Users} tone="primary" />
         <StatCard label="Paid" value={stats.paid} icon={CheckCircle2} tone="success" />
         <StatCard label="Unpaid" value={stats.unpaid} icon={XCircle} tone="destructive" />
@@ -133,6 +139,8 @@ export default function Dashboard() {
         <StatCard label="Monthly Collection" value={`${c}${stats.monthly.toLocaleString()}`} icon={Wallet} tone="primary" hint={`${selectedMonthLabel} ${selectedYearLabel}`} />
         <StatCard label="Yearly Collection" value={`${c}${stats.yearly.toLocaleString()}`} icon={TrendingUp} tone="success" />
         <StatCard label="Outstanding" value={`${c}${stats.outstanding.toLocaleString()}`} icon={AlertTriangle} tone="destructive" />
+        <StatCard label="Cash Received" value={`${c}${stats.cashReceived.toLocaleString()}`} icon={Wallet} tone="success" />
+        <StatCard label="Account Received" value={`${c}${stats.accountReceived.toLocaleString()}`} icon={Building2} tone="info" />
         <StatCard label="Collection %" value={`${stats.pct}%`} icon={Percent} tone="accent" hint={`${stats.paid} of ${stats.total} paid`} />
       </div>
 

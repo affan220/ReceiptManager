@@ -9,10 +9,10 @@ import { parseDelimited } from "@/lib/store";
 import { Upload, FileUp, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
-const SAMPLE = `name,phone,amount,status,month,year,months_pending
-Abdullah Rahman,+91 90000 12345,500,paid,6,2026,0
-Khalid Mansoor,+91 90000 67890,750,unpaid,6,2026,2
-Tariq Saeed,+91 90000 11223,1000,pending,6,2026,1`;
+const SAMPLE = `name,phone,amount,status,payment_mode,month,year,months_pending
+Abdullah Rahman,+91 90000 12345,500,paid,cash,6,2026,0
+Khalid Mansoor,+91 90000 67890,750,unpaid,cash,6,2026,2
+Tariq Saeed,+91 90000 11223,1000,pending,account,6,2026,1`;
 
 export default function Import() {
   const { addMembers } = useApp();
@@ -67,7 +67,7 @@ export default function Import() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               onBlur={refreshPreview}
-              placeholder="name,phone,amount,status,month,year,months_pending"
+              placeholder="name,phone,amount,status,payment_mode,month,year,months_pending"
               className="font-mono text-xs"
             />
           </div>
@@ -92,7 +92,7 @@ export default function Import() {
                     <span className="font-medium truncate">{r.name}</span>
                     <span className="text-xs text-muted-foreground shrink-0">{r.status}</span>
                   </div>
-                  <p className="text-xs text-muted-foreground truncate">{r.phone} · {r.amount} · {r.month}/{r.year}</p>
+                  <p className="text-xs text-muted-foreground truncate">{r.phone} · {r.amount} · {r.payment_mode ?? "cash"} · {r.month}/{r.year}</p>
                 </div>
               ))}
               {preview.length > 30 && (
@@ -105,10 +105,10 @@ export default function Import() {
 
       <div className="card-surface p-5 mt-6">
         <h3 className="font-display font-semibold mb-2">Expected format</h3>
-        <pre className="rounded-lg bg-muted p-3 text-xs overflow-x-auto"><code>{`name,phone,amount,status,month,year,months_pending
-Ahmed Khan,+91 98000 11111,500,paid,6,2026,0`}</code></pre>
+        <pre className="rounded-lg bg-muted p-3 text-xs overflow-x-auto"><code>{`name,phone,amount,status,payment_mode,month,year,months_pending
+Ahmed Khan,+91 98000 11111,500,paid,cash,6,2026,0`}</code></pre>
         <p className="text-xs text-muted-foreground mt-2">
-          Status values: <code>paid</code>, <code>unpaid</code>, <code>pending</code>. Month is 1–12.
+          Status values: <code>paid</code>, <code>unpaid</code>, <code>pending</code>. Payment mode: <code>cash</code>, <code>account</code> (default: cash). Month is 1–12.
         </p>
       </div>
     </AppShell>

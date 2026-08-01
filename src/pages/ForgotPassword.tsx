@@ -1,12 +1,3 @@
-/**
- * ForgotPassword — replaced with a simple notice.
- *
- * This app uses username-based authentication with an internal fake email
- * address (username@masjid.local). Password reset emails cannot be delivered
- * to that address, so the standard "forgot password" email flow is not available.
- *
- * This app uses username + password login and stores credentials locally in IndexedDB.
- */
 import { Link } from "react-router-dom";
 import { AuthLayout } from "./Login";
 import { Button } from "@/components/ui/button";

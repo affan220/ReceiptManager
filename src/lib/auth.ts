@@ -1,8 +1,8 @@
 /**
- * Auth helper utilities for username-based local authentication.
+ * Auth helper utilities for username-based authentication.
  *
- * Users interact with a plain username + password UI.
- * Credentials are stored directly in IndexedDB.
+ * Usernames are normalized before they are mapped to the internal
+ * auth identity, and this file keeps the string rules in one place.
  */
 
 /** Username rules:
@@ -35,4 +35,48 @@ export function validateUsername(username: string): string | null {
   if (!/^[a-z0-9._]+$/i.test(raw))
     return "Username may only contain letters, numbers, underscore (_), or dot (.).";
   return null;
+}
+
+function addCandidate(candidates: string[], seen: Set<string>, value: string, limit: number) {
+  const normalized = normalizeUsername(value);
+  if (!normalized || seen.has(normalized)) return;
+  seen.add(normalized);
+  candidates.push(normalized);
+  if (candidates.length >= limit) {
+    throw new Error("limit reached");
+  }
+}
+
+/**
+ * Generate human-friendly username alternatives from a requested base.
+ * The caller is responsible for checking availability before showing them.
+ */
+export function generateUsernameSuggestions(username: string, limit = 5): string[] {
+  const normalized = normalizeUsername(username);
+  if (!normalized || limit <= 0) return [];
+
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const root = normalized.replace(/(?:[._-]?\d+)$/, "") || normalized;
+
+  try {
+    addCandidate(candidates, seen, normalized, limit);
+
+    const suffixes = ["1", "01", "2026", "_1", "_01", "_official", "_masjid"];
+    for (const suffix of suffixes) {
+      addCandidate(candidates, seen, `${normalized}${suffix}`, limit);
+    }
+
+    for (const suffix of suffixes) {
+      addCandidate(candidates, seen, `${root}${suffix}`, limit);
+    }
+
+    for (let i = 2; i <= 99; i += 1) {
+      addCandidate(candidates, seen, `${root}${i}`, limit);
+    }
+  } catch {
+    // The helper throws internally when the requested limit is reached.
+  }
+
+  return candidates.slice(0, limit);
 }

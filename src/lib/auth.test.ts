@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAuthEmailFromUsername, normalizeUsername, usernameToEmail, validateUsername } from "./auth";
+import { buildAuthEmailFromUsername, generateUsernameSuggestions, normalizeUsername, usernameToEmail, validateUsername } from "./auth";
 
 describe("normalizeUsername", () => {
   it("normalizes usernames to lowercase and strips invalid characters", () => {
@@ -51,5 +51,20 @@ describe("validateUsername", () => {
   it("rejects usernames with invalid characters", () => {
     expect(validateUsername("hello world")).not.toBeNull();
     expect(validateUsername("user@masjid")).not.toBeNull();
+  });
+});
+
+describe("generateUsernameSuggestions", () => {
+  it("keeps the original username first and adds readable alternatives", () => {
+    expect(generateUsernameSuggestions("ahmed_admin", 4)).toEqual([
+      "ahmed_admin",
+      "ahmed_admin1",
+      "ahmed_admin01",
+      "ahmed_admin2026",
+    ]);
+  });
+
+  it("returns an empty list for blank input", () => {
+    expect(generateUsernameSuggestions("   ")).toEqual([]);
   });
 });
