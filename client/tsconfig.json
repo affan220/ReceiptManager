@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }],
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "noImplicitAny": false,
+    "noUnusedParameters": false,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "noUnusedLocals": false,
+    "strictNullChecks": false
+  },
+  "include": ["src", "tailwind.config.ts", "vite.config.ts"]
+}
