@@ -76,7 +76,13 @@ export async function generateReceiptPDF(member: Member, settings: OrgSettings) 
   doc.setFont("helvetica", "normal");
   const modeText = (member.payment_mode ?? "cash") === "account" ? "Account" : "Cash";
   doc.text(receiptNo, 115, 132);
-  doc.text(new Date().toLocaleDateString(), 115, 148);
+  doc.text(
+    member.payment_date
+      ? new Date(`${member.payment_date}T00:00:00`).toLocaleDateString()
+      : new Date().toLocaleDateString(),
+    115,
+    148,
+  );
   doc.text(modeText, 115, 164);
 
   doc.setFont("helvetica", "bold");
@@ -88,6 +94,11 @@ export async function generateReceiptPDF(member: Member, settings: OrgSettings) 
   doc.text("Status:", pageW / 2, 148);
   doc.setFont("helvetica", "normal");
   doc.text(member.status.toUpperCase(), pageW / 2 + 70, 148);
+  if (member.voucher_number) {
+    doc.setFontSize(8);
+    doc.text(`Voucher: ${member.voucher_number}`, pageW - 40, 164, { align: "right" });
+    doc.setFontSize(10);
+  }
 
   // Member details box
   doc.setDrawColor(220);

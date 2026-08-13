@@ -38,6 +38,7 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
               name: "", phone: "", amount: 0, status: "unpaid", payment_mode: "cash",
               month: now.getMonth() + 1, year: now.getFullYear(),
               hold: false, months_pending: 0,
+              payment_date: null, voucher_number: null,
             }
       );
     }
@@ -152,6 +153,30 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
               </Select>
             </div>
           </div>
+          {isEdit && (
+            <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-muted/20 p-3">
+              <div className="grid gap-2">
+                <Label htmlFor="payment-date">Payment date</Label>
+                <Input
+                  id="payment-date"
+                  type="date"
+                  value={form.payment_date ?? ""}
+                  onChange={(e) => setForm({ ...form, payment_date: e.target.value || null })}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="voucher-number">Voucher number</Label>
+                <Input
+                  id="voucher-number"
+                  value={form.voucher_number ?? ""}
+                  onChange={(e) => setForm({ ...form, voucher_number: e.target.value })}
+                  placeholder="e.g. VCH-2026-001"
+                  autoComplete="off"
+                />
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label>Payment Mode</Label>

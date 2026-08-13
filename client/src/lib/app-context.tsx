@@ -50,6 +50,8 @@ type DbMember = {
   year: number;
   hold: boolean;
   months_pending: number;
+  payment_date: string | null;
+  voucher_number: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -65,6 +67,8 @@ function rowToMember(r: DbMember): Member {
     year: r.year,
     hold: !!r.hold,
     months_pending: r.months_pending ?? 0,
+    payment_date: r.payment_date ?? null,
+    voucher_number: r.voucher_number ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -82,6 +86,8 @@ function memberToInsert(m: Partial<Member>, userId: string) {
     year: m.year ?? now.getFullYear(),
     hold: !!m.hold,
     months_pending: m.months_pending ?? 0,
+    payment_date: m.payment_date || null,
+    voucher_number: m.voucher_number?.trim() || null,
   };
 }
 
@@ -99,6 +105,8 @@ function sanitizeMemberPatch(patch: Partial<Member>) {
   if (cleaned.payment_mode !== undefined) {
     cleaned.payment_mode = cleaned.payment_mode === "account" ? "account" : "cash";
   }
+  if (cleaned.payment_date !== undefined) cleaned.payment_date = cleaned.payment_date || null;
+  if (cleaned.voucher_number !== undefined) cleaned.voucher_number = cleaned.voucher_number?.trim() || null;
 
   return cleaned as Partial<Member>;
 }

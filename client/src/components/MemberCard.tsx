@@ -128,6 +128,13 @@ export function MemberCard({ member, onEdit }: Props) {
         </div>
       </div>
 
+      {(member.payment_date || member.voucher_number) && (
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          {member.payment_date && <div>Payment date: {new Date(`${member.payment_date}T00:00:00`).toLocaleDateString()}</div>}
+          {member.voucher_number && <div>Voucher: {member.voucher_number}</div>}
+        </div>
+      )}
+
       <div className="flex gap-2 pt-1">
         <Button variant="outline" size="sm" className="flex-1" onClick={whatsapp}>
           <MessageCircle className="mr-1.5 h-3.5 w-3.5" /> Remind

@@ -15,6 +15,8 @@ export interface Member {
   year: number;
   hold: boolean;
   months_pending: number;
+  payment_date: string | null;
+  voucher_number: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +83,8 @@ export function parseDelimited(text: string): Partial<Member>[] {
       month: Number(row.month) || new Date().getMonth() + 1,
       year: Number(row.year) || new Date().getFullYear(),
       months_pending: Number(row.months_pending || row.pending || 0),
+      payment_date: row.payment_date || row.paymentdate || null,
+      voucher_number: row.voucher_number || row.voucher || null,
     };
   });
 }
