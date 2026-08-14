@@ -14,9 +14,28 @@ import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 
-type SortKey = "name" | "amount" | "month" | "year" | "status" | "payment_mode";
+type SortKey = "name" | "amount" | "month" | "year" | "status" | "payment_mode" | "payment_date" | "voucher_number";
+type PaymentDateRange = "all" | "today" | "week" | "month" | "custom";
 const PAGE_SIZE = 10;
 const ALL_STATUSES: StatusFilterValue[] = ["paid", "unpaid", "pending", "hold"];
+
+function matchesPaymentDate(value: string | null, range: PaymentDateRange, from: string, to: string) {
+  if (range === "all") return true;
+  if (!value) return false;
+  const paymentDate = new Date(`${value}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (range === "today") return paymentDate.getTime() === today.getTime();
+  if (range === "week") {
+    const weekStart = new Date(today);
+    weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+    return paymentDate >= weekStart && paymentDate <= today;
+  }
+  if (range === "month") return paymentDate.getMonth() === today.getMonth() && paymentDate.getFullYear() === today.getFullYear();
+  if (from && paymentDate < new Date(`${from}T00:00:00`)) return false;
+  if (to && paymentDate > new Date(`${to}T00:00:00`)) return false;
+  return Boolean(from || to);
+}
 
 function formatPdfAmount(amount: number) {
   return `RS ${amount.toLocaleString()}`;
@@ -41,6 +60,9 @@ export default function Reports() {
   const [statuses, setStatuses] = useState<StatusFilterValue[]>(ALL_STATUSES);
   const [month, setMonth] = useState("all");
   const [paymentMode, setPaymentMode] = useState<"all" | "cash" | "account">("all");
+  const [paymentDateRange, setPaymentDateRange] = useState<PaymentDateRange>("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
@@ -53,7 +75,8 @@ export default function Reports() {
       if (!matchesStatus) return false;
       if (month !== "all" && m.month !== Number(month)) return false;
       if (paymentMode !== "all" && (m.payment_mode ?? "cash") !== paymentMode) return false;
-      if (search && !`${m.name} ${m.phone} ${m.payment_mode ?? "cash"}`.toLowerCase().includes(search.toLowerCase())) return false;
+      if (!matchesPaymentDate(m.payment_date, paymentDateRange, dateFrom, dateTo)) return false;
+      if (search && !`${m.name} ${m.phone} ${m.payment_mode ?? "cash"} ${m.voucher_number ?? ""} ${m.payment_date ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
     list = [...list].sort((a, b) => {
@@ -64,7 +87,7 @@ export default function Reports() {
       return 0;
     });
     return list;
-  }, [members, search, statuses, month, paymentMode, sortKey, sortDir]);
+  }, [members, search, statuses, month, paymentMode, paymentDateRange, dateFrom, dateTo, sortKey, sortDir]);
 
   const paged = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -92,7 +115,7 @@ export default function Reports() {
   const c = settings.currency;
 
   const exportCSV = () => {
-    const headers = ["Name", "Phone", "Amount", "Status", "Payment Mode", "Month", "Year", "Months Pending", "Monthly Pending", "Pending Total", "Hold"];
+    const headers = ["Name", "Phone", "Amount", "Status", "Payment Mode", "Payment Date", "Voucher Number", "Month", "Year", "Months Pending", "Monthly Pending", "Pending Total", "Hold"];
     const rows = filtered.map((m) => {
       const pending = getPendingAmounts(m);
       return [
@@ -101,6 +124,8 @@ export default function Reports() {
         m.amount,
         m.status,
         (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
+        m.payment_date ?? "",
+        m.voucher_number ?? "",
         MONTHS[m.month - 1],
         m.year,
         pending.pendingMonths,
@@ -129,6 +154,8 @@ export default function Reports() {
         Amount: m.amount,
         Status: m.status,
         "Payment Mode": (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
+        "Payment Date": m.payment_date ?? "",
+        "Voucher Number": m.voucher_number ?? "",
         Month: MONTHS[m.month - 1],
         Year: m.year,
         "Months Pending": pending.pendingMonths,
@@ -152,7 +179,7 @@ export default function Reports() {
     doc.text(`Generated ${new Date().toLocaleString()}`, 14, 25);
     autoTable(doc, {
       startY: 32,
-      head: [["Name", "Phone", "Amount", "Status", "Payment Mode", "Period", "Months", "Pending Total"]],
+      head: [["Name", "Phone", "Amount", "Status", "Payment Mode", "Payment Date", "Voucher", "Period", "Months", "Pending Total"]],
       body: filtered.map((m) => {
         const pending = getExportPendingAmounts(m);
         return [
@@ -161,6 +188,8 @@ export default function Reports() {
           formatPdfAmount(m.amount),
           m.status,
           (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
+          m.payment_date ?? "—",
+          m.voucher_number ?? "—",
           `${MONTHS[m.month - 1]} ${m.year}`,
           pending.pendingMonths,
           formatPdfAmount(pending.totalPendingAmount),
@@ -185,7 +214,7 @@ export default function Reports() {
       <div className="card-surface p-4 mb-4 flex flex-wrap items-center gap-3">
         <div className="relative min-w-[200px] flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search by name, phone, mode..." className="pl-9" />
+          <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search by name, phone, voucher, mode..." className="pl-9" />
         </div>
         <StatusMultiSelect value={statuses} onValueChange={(next) => { setStatuses(next); setPage(1); }} className="w-[180px]" />
         <Select value={paymentMode} onValueChange={(v) => { setPaymentMode(v as "all" | "cash" | "account"); setPage(1); }}>
@@ -196,6 +225,22 @@ export default function Reports() {
             <SelectItem value="account">🏦 Account</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={paymentDateRange} onValueChange={(v) => { setPaymentDateRange(v as PaymentDateRange); setPage(1); }}>
+          <SelectTrigger className="w-[150px]"><SelectValue placeholder="Payment date" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All payment dates</SelectItem>
+            <SelectItem value="today">Today</SelectItem>
+            <SelectItem value="week">This week</SelectItem>
+            <SelectItem value="month">This month</SelectItem>
+            <SelectItem value="custom">Custom range</SelectItem>
+          </SelectContent>
+        </Select>
+        {paymentDateRange === "custom" && (
+          <>
+            <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} className="w-[145px]" aria-label="Payment date from" />
+            <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="w-[145px]" aria-label="Payment date to" />
+          </>
+        )}
         <Select value={month} onValueChange={(v) => { setMonth(v); setPage(1); }}>
           <SelectTrigger className="w-[150px]"><SelectValue placeholder="All months" /></SelectTrigger>
           <SelectContent>
@@ -220,7 +265,7 @@ export default function Reports() {
             <TableHeader>
               <TableRow>
                 {([
-                  ["name", "Name"], ["amount", "Amount"], ["month", "Month"], ["year", "Year"], ["status", "Status"], ["payment_mode", "Payment Mode"]
+                  ["name", "Name"], ["amount", "Amount"], ["month", "Month"], ["year", "Year"], ["status", "Status"], ["payment_mode", "Payment Mode"], ["payment_date", "Payment Date"], ["voucher_number", "Voucher"]
                 ] as [SortKey, string][]).map(([k, label]) => (
                   <TableHead key={k}>
                     <button onClick={() => toggleSort(k)} className="inline-flex items-center gap-1 hover:text-foreground">
@@ -257,6 +302,8 @@ export default function Reports() {
                         {isAccount ? "🏦 Account" : "💵 Cash"}
                       </span>
                     </TableCell>
+                    <TableCell>{m.payment_date ? new Date(`${m.payment_date}T00:00:00`).toLocaleDateString() : "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">{m.voucher_number || "—"}</TableCell>
                     <TableCell className="text-muted-foreground">{m.phone || "—"}</TableCell>
                     <TableCell className="text-right">{pending.pendingMonths}</TableCell>
                     <TableCell className="text-right">RS {pending.monthlyPendingAmount.toLocaleString()}</TableCell>
@@ -265,7 +312,7 @@ export default function Reports() {
                 );
               })}
               {paged.length === 0 && (
-                <TableRow><TableCell colSpan={10} className="text-center py-10 text-muted-foreground">No results</TableCell></TableRow>
+                <TableRow><TableCell colSpan={12} className="text-center py-10 text-muted-foreground">No results</TableCell></TableRow>
               )}
             </TableBody>
           </Table>

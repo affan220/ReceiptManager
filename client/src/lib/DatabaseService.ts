@@ -9,6 +9,7 @@ export type ProfileRow = {
   phone: string | null;
   address: string | null;
   username: string | null;
+  last_login_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -19,6 +20,22 @@ export interface AuthUser {
   createdAt: string;
   user_metadata: { username: string };
 }
+
+export interface PaymentRecord {
+  id: string;
+  userId: string;
+  memberId: string;
+  voucherNumber: string;
+  paymentDate: string;
+  amount: number;
+  paymentStatus: string;
+  paymentMethod: "cash" | "account";
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ThemePreference = "light" | "dark" | "liquid_glass";
 
 export interface Receipt {
   id: string;
@@ -62,6 +79,7 @@ type DbSettings = {
   signature_label: string;
   receipt_prefix: string;
   currency: string;
+  theme_preference?: ThemePreference;
 };
 
 function dispatchAuthStateChange() {
@@ -129,8 +147,15 @@ function memberPatch(member: Partial<Member>) {
   if (member.hold !== undefined) patch.hold = Boolean(member.hold);
   if (member.months_pending !== undefined) patch.months_pending = Number(member.months_pending);
   if (member.payment_date !== undefined) patch.payment_date = member.payment_date || null;
-  if (member.voucher_number !== undefined) patch.voucher_number = member.voucher_number.trim() || null;
+  if (member.voucher_number !== undefined) patch.voucher_number = member.voucher_number?.trim() || null;
   return patch;
+}
+
+function messageForDatabaseError(error: { code?: string; message?: string } | null | undefined, fallback: string) {
+  const message = error?.message?.toLowerCase() ?? "";
+  if (error?.code === "23505" && message.includes("voucher")) return "This voucher number already exists.";
+  if (error?.code === "23505" && message.includes("username")) return "This username is already taken. Please choose another username.";
+  return fallback;
 }
 
 function messageForAuthError(message: string, action: "login" | "register") {
@@ -183,6 +208,11 @@ export async function login(username: string, password: string): Promise<AuthUse
   });
   if (error || !data.user) throw new Error(messageForAuthError(error?.message ?? "", "login"));
 
+  await supabase
+    .from("profiles")
+    .update({ last_login_at: new Date().toISOString() })
+    .eq("id", data.user.id);
+
   const user = toAuthUser(data.user);
   dispatchAuthStateChange();
   return user;
@@ -225,7 +255,7 @@ export async function addMember(userId: string, member: Partial<Member>): Promis
     .insert(memberInsert(userId, member))
     .select()
     .single();
-  if (error || !data) throw new Error("Could not save the member record.");
+  if (error || !data) throw new Error(messageForDatabaseError(error, "Could not save the member record."));
   return toMember(data as DbMember);
 }
 
@@ -237,7 +267,7 @@ export async function updateMember(id: string, userId: string, patch: Partial<Me
     .eq("user_id", userId)
     .select()
     .maybeSingle();
-  if (error || !data) throw new Error("Member not found or could not be updated.");
+  if (error || !data) throw new Error(messageForDatabaseError(error, "Member not found or could not be updated."));
   return toMember(data as DbMember);
 }
 
@@ -312,6 +342,60 @@ export async function saveSettings(userId: string, settings: Partial<OrgSettings
   };
   const { error } = await supabase.from("org_settings").upsert(record, { onConflict: "user_id" });
   if (error) throw new Error("Could not save organization settings.");
+}
+
+export async function getPayments(userId?: string): Promise<PaymentRecord[]> {
+  const currentUser = await getCurrentUser();
+  const ownerId = userId ?? currentUser?.id;
+  if (!ownerId) return [];
+
+  const { data, error } = await supabase
+    .from("payments")
+    .select("*")
+    .eq("user_id", ownerId)
+    .order("payment_date", { ascending: false })
+    .order("created_at", { ascending: false });
+  if (error) throw new Error("Could not load payment history.");
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    id: String(row.id),
+    userId: String(row.user_id),
+    memberId: String(row.member_id),
+    voucherNumber: String(row.voucher_number),
+    paymentDate: String(row.payment_date),
+    amount: Number(row.amount),
+    paymentStatus: String(row.payment_status),
+    paymentMethod: row.payment_method === "account" ? "account" : "cash",
+    notes: String(row.notes ?? ""),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  }));
+}
+
+export async function getMemberPayments(memberId: string, userId?: string): Promise<PaymentRecord[]> {
+  const payments = await getPayments(userId);
+  return payments.filter((payment) => payment.memberId === memberId);
+}
+
+export async function loadThemePreference(): Promise<ThemePreference> {
+  const currentUser = await getCurrentUser();
+  if (!currentUser) return "light";
+  const { data, error } = await supabase
+    .from("org_settings")
+    .select("theme_preference")
+    .eq("user_id", currentUser.id)
+    .maybeSingle();
+  if (error || !data) return "light";
+  const preference = (data as { theme_preference?: string }).theme_preference;
+  return preference === "dark" || preference === "liquid_glass" ? preference : "light";
+}
+
+export async function saveThemePreference(preference: ThemePreference): Promise<void> {
+  const currentUser = await getCurrentUser();
+  if (!currentUser) throw new Error("Sign in before changing the theme.");
+  const { error } = await supabase
+    .from("org_settings")
+    .upsert({ user_id: currentUser.id, theme_preference: preference }, { onConflict: "user_id" });
+  if (error) throw new Error("Could not save your theme preference.");
 }
 
 export async function suggestAvailableUsernames(username: string, limit = 5): Promise<string[]> {

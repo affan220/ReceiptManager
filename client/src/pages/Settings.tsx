@@ -5,11 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
-import { useTheme } from "@/hooks/use-theme";
+import { Theme, useTheme } from "@/hooks/use-theme";
 import { OrgSettings, initialsOf } from "@/lib/store";
 import { toast } from "sonner";
-import { Save, Upload, Trash2, Moon, Sun } from "lucide-react";
+import { Save, Upload, Trash2, Moon, Sun, Sparkles } from "lucide-react";
 
 export default function Settings() {
   const { settings, updateSettings } = useApp();
@@ -32,6 +31,12 @@ export default function Settings() {
   const save = () => {
     updateSettings(form);
     toast.success("Settings saved");
+  };
+
+  const changeTheme = (nextTheme: Theme) => {
+    void setTheme(nextTheme)
+      .then(() => toast.success("Appearance saved"))
+      .catch((error) => toast.error(error instanceof Error ? error.message : "Could not save appearance."));
   };
 
   return (
@@ -102,16 +107,27 @@ export default function Settings() {
           </div>
 
           <div className="card-surface p-6">
-            <h2 className="font-display text-lg font-semibold mb-4">Appearance</h2>
-            <div className="flex items-center justify-between rounded-xl border border-border bg-muted/30 px-4 py-3">
-              <div className="flex items-center gap-3">
-                {theme === "dark" ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
-                <div>
-                  <p className="font-medium">Dark mode</p>
-                  <p className="text-xs text-muted-foreground">Easier on the eyes at night</p>
-                </div>
-              </div>
-              <Switch checked={theme === "dark"} onCheckedChange={(v) => setTheme(v ? "dark" : "light")} />
+            <h2 className="font-display text-lg font-semibold mb-1">Appearance</h2>
+            <p className="text-xs text-muted-foreground mb-4">Your choice is securely saved to this account and follows you across devices.</p>
+            <div className="grid gap-2">
+              {([
+                ["light", "Light", "Clean, bright workspace", Sun],
+                ["dark", "Dark", "Reduced eye strain at night", Moon],
+                ["liquid_glass", "Liquid Glass", "Frosted, layered glass finish", Sparkles],
+              ] as const).map(([value, label, description, Icon]) => (
+                <button
+                  type="button"
+                  key={value}
+                  onClick={() => changeTheme(value)}
+                  className={`flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition-all ${theme === value ? "border-primary bg-primary/10 shadow-sm" : "border-border bg-muted/30 hover:-translate-y-0.5 hover:bg-muted/50"}`}
+                >
+                  <Icon className="h-4 w-4 shrink-0 text-primary" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{label}</span>
+                    <span className="block text-xs text-muted-foreground">{description}</span>
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
         </div>

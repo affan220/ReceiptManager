@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Member, MONTHS, MemberStatus } from "@/lib/store";
 import { useApp } from "@/lib/app-context";
+import { getMemberPayments, PaymentRecord } from "@/lib/DatabaseService";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 
@@ -24,9 +25,11 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
   const isEdit = !!member;
   const [form, setForm] = useState<Partial<Member>>({});
   const [busy, setBusy] = useState(false);
+  const [paymentHistory, setPaymentHistory] = useState<PaymentRecord[]>([]);
   const monthlyAmount = Number(form.amount ?? 0);
   const pendingMonths = Number(form.months_pending ?? 0);
   const totalPendingAmount = monthlyAmount * Math.max(1, pendingMonths);
+  const today = new Date().toISOString().slice(0, 10);
 
   useEffect(() => {
     if (open) {
@@ -44,6 +47,17 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
     }
   }, [open, member]);
 
+  useEffect(() => {
+    let active = true;
+    if (!open || !member) {
+      setPaymentHistory([]);
+      return () => { active = false; };
+    }
+    void getMemberPayments(member.id)
+      .then((history) => { if (active) setPaymentHistory(history); })
+      .catch(() => { if (active) setPaymentHistory([]); });
+    return () => { active = false; };
+  }, [open, member]);
 
   const save = async () => {
     if (!form.name?.trim()) {
@@ -142,7 +156,14 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
               <Label>Status</Label>
               <Select
                 value={form.status}
-                onValueChange={(v) => setForm({ ...form, status: v as MemberStatus })}
+                onValueChange={(v) => {
+                  const status = v as MemberStatus;
+                  setForm({
+                    ...form,
+                    status,
+                    ...(status === "paid" && !form.payment_date ? { payment_date: today } : {}),
+                  });
+                }}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -153,26 +174,49 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
               </Select>
             </div>
           </div>
-          {isEdit && (
+          {form.status === "paid" && (
             <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-muted/20 p-3">
-              <div className="grid gap-2">
-                <Label htmlFor="payment-date">Payment date</Label>
-                <Input
-                  id="payment-date"
-                  type="date"
-                  value={form.payment_date ?? ""}
-                  onChange={(e) => setForm({ ...form, payment_date: e.target.value || null })}
-                />
-              </div>
               <div className="grid gap-2">
                 <Label htmlFor="voucher-number">Voucher number</Label>
                 <Input
                   id="voucher-number"
                   value={form.voucher_number ?? ""}
                   onChange={(e) => setForm({ ...form, voucher_number: e.target.value })}
-                  placeholder="e.g. VCH-2026-001"
+                  placeholder="Generated automatically, e.g. VCH-000001"
                   autoComplete="off"
                 />
+                <p className="text-xs text-muted-foreground">Leave blank to generate the next secure voucher automatically.</p>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="payment-date">Payment date</Label>
+                <Input
+                  id="payment-date"
+                  type="date"
+                  value={form.payment_date ?? today}
+                  onChange={(e) => setForm({ ...form, payment_date: e.target.value || null })}
+                />
+              </div>
+            </div>
+          )}
+
+          {isEdit && paymentHistory.length > 0 && (
+            <div className="rounded-xl border border-border bg-muted/20 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <Label className="text-sm">Payment history</Label>
+                <span className="text-xs text-muted-foreground">{paymentHistory.length} record{paymentHistory.length === 1 ? "" : "s"}</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="text-muted-foreground"><tr><th className="pb-1 pr-3 font-medium">Voucher</th><th className="pb-1 pr-3 font-medium">Date</th><th className="pb-1 pr-3 font-medium">Amount</th><th className="pb-1 font-medium">Status</th></tr></thead>
+                  <tbody>{paymentHistory.map((payment) => (
+                    <tr key={payment.id} className="border-t border-border/60">
+                      <td className="py-1.5 pr-3 font-mono">{payment.voucherNumber}</td>
+                      <td className="py-1.5 pr-3">{new Date(`${payment.paymentDate}T00:00:00`).toLocaleDateString()}</td>
+                      <td className="py-1.5 pr-3">RS {payment.amount.toLocaleString()}</td>
+                      <td className="py-1.5 capitalize">{payment.paymentStatus}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
               </div>
             </div>
           )}

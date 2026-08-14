@@ -4,7 +4,8 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppProvider } from "@/lib/app-context";
-import { AuthProvider } from "@/lib/auth-context";
+import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { useTheme } from "@/hooks/use-theme";
 import { StartupSplash } from "@/components/StartupSplash";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Dashboard from "./pages/Dashboard";
@@ -19,11 +20,22 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
+function ThemeBootstrap() {
+  const { user } = useAuth();
+  return <ThemeController key={user?.id ?? "signed-out"} />;
+}
+
+function ThemeController() {
+  useTheme();
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <BrowserRouter>
         <AuthProvider>
+          <ThemeBootstrap />
           <AppProvider>
             <Toaster />
             <Sonner position="top-right" />

@@ -112,6 +112,39 @@
     --gradient-sidebar: linear-gradient(180deg, hsl(215 38% 7%), hsl(215 40% 5%));
     --shadow-glow: 0 8px 24px -6px hsl(158 64% 48% / 0.4);
   }
+
+  html[data-theme="liquid_glass"] {
+    --background: 215 58% 8%;
+    --foreground: 210 35% 96%;
+    --card: 215 44% 17%;
+    --card-foreground: 210 35% 96%;
+    --popover: 215 44% 17%;
+    --popover-foreground: 210 35% 96%;
+    --secondary: 215 34% 25%;
+    --secondary-foreground: 210 35% 96%;
+    --muted: 215 30% 24%;
+    --muted-foreground: 210 22% 76%;
+    --border: 210 60% 92% / 0.22;
+    --input: 210 60% 92% / 0.2;
+    --sidebar-background: 215 46% 13%;
+    --sidebar-accent: 210 56% 96% / 0.1;
+    --sidebar-border: 210 60% 92% / 0.16;
+    --gradient-surface: linear-gradient(140deg, hsl(210 92% 96% / 0.16), hsl(215 52% 20% / 0.22));
+    --gradient-sidebar: linear-gradient(160deg, hsl(210 92% 96% / 0.14), hsl(215 48% 11% / 0.6));
+    --shadow-sm: 0 12px 36px hsl(215 55% 4% / 0.22);
+    --shadow-md: 0 18px 52px hsl(215 55% 4% / 0.3);
+    --shadow-lg: 0 26px 70px hsl(215 55% 4% / 0.38);
+    --transition-smooth: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  html[data-theme="liquid_glass"] body {
+    background:
+      radial-gradient(circle at 10% 10%, hsl(158 78% 54% / 0.22), transparent 28%),
+      radial-gradient(circle at 88% 4%, hsl(212 92% 64% / 0.24), transparent 31%),
+      radial-gradient(circle at 50% 100%, hsl(288 75% 60% / 0.16), transparent 35%),
+      linear-gradient(145deg, hsl(215 58% 8%), hsl(221 48% 14%));
+    background-attachment: fixed;
+  }
 }
 
 @layer base {
@@ -137,6 +170,26 @@
   }
   .card-surface:hover {
     box-shadow: var(--shadow-md);
+  }
+
+  html[data-theme="liquid_glass"] .card-surface,
+  html[data-theme="liquid_glass"] .card-elevated {
+    background: linear-gradient(135deg, hsl(210 100% 98% / 0.14), hsl(215 52% 30% / 0.22));
+    border-color: hsl(210 100% 98% / 0.22);
+    box-shadow: 0 18px 54px hsl(215 55% 4% / 0.28), inset 0 1px 0 hsl(210 100% 98% / 0.22);
+    backdrop-filter: blur(22px) saturate(150%);
+    -webkit-backdrop-filter: blur(22px) saturate(150%);
+  }
+
+  html[data-theme="liquid_glass"] .card-surface:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 24px 64px hsl(215 55% 4% / 0.36), inset 0 1px 0 hsl(210 100% 98% / 0.28);
+  }
+
+  html[data-theme="liquid_glass"] [role="dialog"],
+  html[data-theme="liquid_glass"] [data-radix-popper-content-wrapper] > * {
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
   }
   .card-elevated {
     @apply bg-card rounded-2xl border border-border/60;
