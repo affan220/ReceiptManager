@@ -1,4 +1,4 @@
-import { defaultSettings, Member, OrgSettings, PaymentMode } from "./store";
+import { defaultSettings, ImportMemberInput, Member, OrgSettings } from "./store";
 import { generateUsernameSuggestions, normalizeUsername, usernameToEmail } from "./auth";
 import { supabase } from "./supabase";
 
@@ -35,6 +35,17 @@ export interface PaymentRecord {
   updatedAt: string;
 }
 
+export interface BulkImportFailure {
+  row: number;
+  errors: string[];
+}
+
+export interface BulkImportResult {
+  importedCount: number;
+  failedCount: number;
+  errors: BulkImportFailure[];
+}
+
 export type ThemePreference = "light" | "dark" | "liquid_glass";
 
 export interface Receipt {
@@ -48,6 +59,23 @@ export interface Receipt {
   amount: number;
   status: string;
   createdAt: string;
+}
+
+export class ActiveSessionError extends Error {
+  deviceLabel?: string;
+
+  constructor(message: string, deviceLabel?: string) {
+    super(message);
+    this.name = "ActiveSessionError";
+    this.deviceLabel = deviceLabel;
+  }
+}
+
+export class SessionEndedError extends Error {
+  constructor() {
+    super("Your session ended because this account was signed in on another device.");
+    this.name = "SessionEndedError";
+  }
 }
 
 type DbMember = {
@@ -82,8 +110,34 @@ type DbSettings = {
   theme_preference?: ThemePreference;
 };
 
+type SessionClaim = {
+  status?: "claimed" | "taken_over" | "active_elsewhere";
+  device_label?: string;
+  last_seen_at?: string;
+};
+
+type RpcImportResult = {
+  imported_count?: number;
+  failed_count?: number;
+  errors?: Array<{ row?: number; errors?: string[] }>;
+};
+
 function dispatchAuthStateChange() {
   if (typeof window !== "undefined") window.dispatchEvent(new Event("auth-change"));
+}
+
+function dispatchSessionEnded() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("session-ended"));
+}
+
+function deviceLabel() {
+  if (typeof navigator === "undefined") return "Browser";
+  const agent = navigator.userAgent;
+  if (/edg/i.test(agent)) return "Microsoft Edge";
+  if (/firefox/i.test(agent)) return "Firefox";
+  if (/chrome|chromium/i.test(agent)) return "Chrome";
+  if (/safari/i.test(agent)) return "Safari";
+  return "Browser";
 }
 
 function toAuthUser(user: { id: string; created_at?: string; email?: string | null; user_metadata?: Record<string, unknown> }): AuthUser {
@@ -155,6 +209,7 @@ function messageForDatabaseError(error: { code?: string; message?: string } | nu
   const message = error?.message?.toLowerCase() ?? "";
   if (error?.code === "23505" && message.includes("voucher")) return "This voucher number already exists.";
   if (error?.code === "23505" && message.includes("username")) return "This username is already taken. Please choose another username.";
+  if (message.includes("session has ended")) return new SessionEndedError().message;
   return fallback;
 }
 
@@ -168,9 +223,41 @@ function messageForAuthError(message: string, action: "login" | "register") {
   return "Unable to create the account. Please try a different username or contact an administrator.";
 }
 
+async function claimCurrentSession(takeOver: boolean) {
+  const { data, error } = await supabase.rpc("claim_active_session", {
+    p_take_over: takeOver,
+    p_device_label: deviceLabel(),
+  });
+  if (error) throw new Error("Unable to establish a secure device session.");
+  const result = (data ?? {}) as SessionClaim;
+  if (result.status === "active_elsewhere") {
+    throw new ActiveSessionError("This account is already logged in on another device.", result.device_label);
+  }
+  return result;
+}
+
+export async function ensureActiveSession(): Promise<void> {
+  const { data: authData } = await supabase.auth.getUser();
+  if (!authData.user) {
+    dispatchSessionEnded();
+    throw new SessionEndedError();
+  }
+  const { data, error } = await supabase.rpc("heartbeat_active_session");
+  if (error || data !== true) {
+    dispatchSessionEnded();
+    throw new SessionEndedError();
+  }
+}
+
+async function resolveOwner(userId?: string) {
+  await ensureActiveSession();
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) throw new SessionEndedError();
+  if (userId && data.user.id !== userId) throw new Error("You do not have access to this account's data.");
+  return data.user.id;
+}
+
 export async function initializeDatabase(): Promise<void> {
-  // The Supabase client validates configuration when it is constructed. This function
-  // remains for compatibility with the existing application provider.
   return Promise.resolve();
 }
 
@@ -185,20 +272,25 @@ export async function createUser(username: string, password: string): Promise<Au
   });
   if (error || !data.user) throw new Error(messageForAuthError(error?.message ?? "", "register"));
 
+  let authenticatedUser = data.user;
   if (!data.session) {
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
       email: usernameToEmail(normalizedUsername),
       password,
     });
-    if (signInError) throw new Error("Account created, but sign-in is not available yet. Please contact an administrator.");
+    if (signInError || !signInData.user) {
+      throw new Error("Account created, but sign-in is not available yet. Please contact an administrator.");
+    }
+    authenticatedUser = signInData.user;
   }
 
-  const user = toAuthUser(data.user);
+  await claimCurrentSession(false);
+  const user = toAuthUser(authenticatedUser);
   dispatchAuthStateChange();
   return user;
 }
 
-export async function login(username: string, password: string): Promise<AuthUser> {
+export async function login(username: string, password: string, takeOver = false): Promise<AuthUser> {
   const normalizedUsername = normalizeUsername(username);
   if (!normalizedUsername || !password) throw new Error("Username and password are required.");
 
@@ -208,10 +300,12 @@ export async function login(username: string, password: string): Promise<AuthUse
   });
   if (error || !data.user) throw new Error(messageForAuthError(error?.message ?? "", "login"));
 
-  await supabase
-    .from("profiles")
-    .update({ last_login_at: new Date().toISOString() })
-    .eq("id", data.user.id);
+  try {
+    await claimCurrentSession(takeOver);
+  } catch (claimError) {
+    await supabase.auth.signOut({ scope: "local" });
+    throw claimError;
+  }
 
   const user = toAuthUser(data.user);
   dispatchAuthStateChange();
@@ -223,36 +317,55 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   return error || !data.user ? null : toAuthUser(data.user);
 }
 
+export async function getValidatedCurrentUser(): Promise<AuthUser | null> {
+  const current = await getCurrentUser();
+  if (!current) return null;
+  await ensureActiveSession();
+  return current;
+}
+
 export async function logout(): Promise<void> {
-  const { error } = await supabase.auth.signOut();
+  await supabase.rpc("release_active_session");
+  const { error } = await supabase.auth.signOut({ scope: "local" });
   if (error) throw new Error("Could not sign out. Please try again.");
   dispatchAuthStateChange();
 }
 
 export async function loadProfile(userId: string): Promise<ProfileRow | null> {
+  await resolveOwner(userId);
   const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
   if (error || !data) return null;
   return data as ProfileRow;
 }
 
 export async function getMembers(userId?: string): Promise<Member[]> {
-  const currentUser = await getCurrentUser();
-  const ownerId = userId ?? currentUser?.id;
-  if (!ownerId) return [];
-
+  const ownerId = await resolveOwner(userId);
   const { data, error } = await supabase
     .from("members")
     .select("*")
     .eq("user_id", ownerId)
     .order("created_at", { ascending: false });
-  if (error) throw new Error("Could not load member records.");
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load member records."));
   return ((data ?? []) as DbMember[]).map(toMember);
 }
 
-export async function addMember(userId: string, member: Partial<Member>): Promise<Member> {
+export async function getMember(id: string, userId?: string): Promise<Member | null> {
+  const ownerId = await resolveOwner(userId);
   const { data, error } = await supabase
     .from("members")
-    .insert(memberInsert(userId, member))
+    .select("*")
+    .eq("id", id)
+    .eq("user_id", ownerId)
+    .maybeSingle();
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load the current member record."));
+  return data ? toMember(data as DbMember) : null;
+}
+
+export async function addMember(userId: string, member: Partial<Member>): Promise<Member> {
+  const ownerId = await resolveOwner(userId);
+  const { data, error } = await supabase
+    .from("members")
+    .insert(memberInsert(ownerId, member))
     .select()
     .single();
   if (error || !data) throw new Error(messageForDatabaseError(error, "Could not save the member record."));
@@ -260,11 +373,18 @@ export async function addMember(userId: string, member: Partial<Member>): Promis
 }
 
 export async function updateMember(id: string, userId: string, patch: Partial<Member>): Promise<Member> {
+  const ownerId = await resolveOwner(userId);
+  const dataPatch = memberPatch(patch);
+  if (!Object.keys(dataPatch).length) {
+    const current = await getMember(id, ownerId);
+    if (!current) throw new Error("Member not found or could not be updated.");
+    return current;
+  }
   const { data, error } = await supabase
     .from("members")
-    .update(memberPatch(patch))
+    .update(dataPatch)
     .eq("id", id)
-    .eq("user_id", userId)
+    .eq("user_id", ownerId)
     .select()
     .maybeSingle();
   if (error || !data) throw new Error(messageForDatabaseError(error, "Member not found or could not be updated."));
@@ -272,15 +392,32 @@ export async function updateMember(id: string, userId: string, patch: Partial<Me
 }
 
 export async function deleteMember(id: string, userId: string): Promise<void> {
-  const { error } = await supabase.from("members").delete().eq("id", id).eq("user_id", userId);
-  if (error) throw new Error("Could not delete the member record.");
+  const ownerId = await resolveOwner(userId);
+  const { error } = await supabase.from("members").delete().eq("id", id).eq("user_id", ownerId);
+  if (error) throw new Error(messageForDatabaseError(error, "Could not delete the member record."));
+}
+
+export async function bulkImportMembers(rows: ImportMemberInput[]): Promise<BulkImportResult> {
+  await ensureActiveSession();
+  const payload = rows.map(({ rowNumber: _rowNumber, ...row }) => row);
+  const { data, error } = await supabase.rpc("bulk_import_members", { p_rows: payload });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not import members."));
+  const result = (data ?? {}) as RpcImportResult;
+  return {
+    importedCount: Number(result.imported_count ?? 0),
+    failedCount: Number(result.failed_count ?? 0),
+    errors: (result.errors ?? []).map((entry) => ({
+      row: Number(entry.row ?? 0),
+      errors: Array.isArray(entry.errors) ? entry.errors.map(String) : ["Invalid row."],
+    })),
+  };
 }
 
 export async function searchMembers(userId: string, query: string): Promise<Member[]> {
   const normalized = query.trim().toLowerCase();
   const members = await getMembers(userId);
   if (!normalized) return members;
-  return members.filter((member) => `${member.name} ${member.phone} ${member.payment_mode}`.toLowerCase().includes(normalized));
+  return members.filter((member) => `${member.name} ${member.phone} ${member.payment_mode} ${member.voucher_number ?? ""}`.toLowerCase().includes(normalized));
 }
 
 export async function getDashboardStats(userId?: string) {
@@ -306,12 +443,9 @@ export async function getDashboardStats(userId?: string) {
 }
 
 export async function loadSettings(userId?: string): Promise<OrgSettings | null> {
-  const currentUser = await getCurrentUser();
-  const ownerId = userId ?? currentUser?.id;
-  if (!ownerId) return null;
-
+  const ownerId = await resolveOwner(userId);
   const { data, error } = await supabase.from("org_settings").select("*").eq("user_id", ownerId).maybeSingle();
-  if (error) throw new Error("Could not load organization settings.");
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load organization settings."));
   if (!data) return null;
   const s = data as DbSettings;
   return {
@@ -328,8 +462,9 @@ export async function loadSettings(userId?: string): Promise<OrgSettings | null>
 }
 
 export async function saveSettings(userId: string, settings: Partial<OrgSettings> & { profile?: { full_name?: string; organization?: string } }): Promise<void> {
+  const ownerId = await resolveOwner(userId);
   const record = {
-    user_id: userId,
+    user_id: ownerId,
     name: settings.name ?? defaultSettings.name,
     tagline: settings.tagline ?? defaultSettings.tagline,
     address: settings.address ?? defaultSettings.address,
@@ -341,21 +476,18 @@ export async function saveSettings(userId: string, settings: Partial<OrgSettings
     currency: settings.currency ?? defaultSettings.currency,
   };
   const { error } = await supabase.from("org_settings").upsert(record, { onConflict: "user_id" });
-  if (error) throw new Error("Could not save organization settings.");
+  if (error) throw new Error(messageForDatabaseError(error, "Could not save organization settings."));
 }
 
 export async function getPayments(userId?: string): Promise<PaymentRecord[]> {
-  const currentUser = await getCurrentUser();
-  const ownerId = userId ?? currentUser?.id;
-  if (!ownerId) return [];
-
+  const ownerId = await resolveOwner(userId);
   const { data, error } = await supabase
     .from("payments")
     .select("*")
     .eq("user_id", ownerId)
     .order("payment_date", { ascending: false })
     .order("created_at", { ascending: false });
-  if (error) throw new Error("Could not load payment history.");
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load payment history."));
   return (data ?? []).map((row: Record<string, unknown>) => ({
     id: String(row.id),
     userId: String(row.user_id),
@@ -379,6 +511,7 @@ export async function getMemberPayments(memberId: string, userId?: string): Prom
 export async function loadThemePreference(): Promise<ThemePreference> {
   const currentUser = await getCurrentUser();
   if (!currentUser) return "light";
+  await ensureActiveSession();
   const { data, error } = await supabase
     .from("org_settings")
     .select("theme_preference")
@@ -390,12 +523,12 @@ export async function loadThemePreference(): Promise<ThemePreference> {
 }
 
 export async function saveThemePreference(preference: ThemePreference): Promise<void> {
-  const currentUser = await getCurrentUser();
+  const currentUser = await getValidatedCurrentUser();
   if (!currentUser) throw new Error("Sign in before changing the theme.");
   const { error } = await supabase
     .from("org_settings")
     .upsert({ user_id: currentUser.id, theme_preference: preference }, { onConflict: "user_id" });
-  if (error) throw new Error("Could not save your theme preference.");
+  if (error) throw new Error(messageForDatabaseError(error, "Could not save your theme preference."));
 }
 
 export async function suggestAvailableUsernames(username: string, limit = 5): Promise<string[]> {
@@ -403,12 +536,13 @@ export async function suggestAvailableUsernames(username: string, limit = 5): Pr
 }
 
 export async function saveReceipt(userId: string, memberId: string, month: number, year: number, amount: number, status: string): Promise<string> {
-  const [settings, sequenceResult] = await Promise.all([loadSettings(userId), supabase.rpc("next_receipt_number")]);
+  const ownerId = await resolveOwner(userId);
+  const [settings, sequenceResult] = await Promise.all([loadSettings(ownerId), supabase.rpc("next_receipt_number")]);
   if (sequenceResult.error || sequenceResult.data === null) throw new Error("Could not allocate a receipt number.");
 
   const receiptNo = `${settings?.receiptPrefix ?? defaultSettings.receiptPrefix}-${year}-${String(sequenceResult.data).padStart(5, "0")}`;
   const { error } = await supabase.from("receipts").insert({
-    user_id: userId,
+    user_id: ownerId,
     member_id: memberId,
     month,
     year,
@@ -416,20 +550,18 @@ export async function saveReceipt(userId: string, memberId: string, month: numbe
     status,
     receipt_no: receiptNo,
   });
-  if (error) throw new Error("Could not save the receipt record.");
+  if (error) throw new Error(messageForDatabaseError(error, "Could not save the receipt record."));
   return receiptNo;
 }
 
 export async function getReceipts(userId?: string): Promise<Receipt[]> {
-  const currentUser = await getCurrentUser();
-  const ownerId = userId ?? currentUser?.id;
-  if (!ownerId) return [];
+  const ownerId = await resolveOwner(userId);
   const { data, error } = await supabase
     .from("receipts")
     .select("*")
     .eq("user_id", ownerId)
     .order("created_at", { ascending: false });
-  if (error) throw new Error("Could not load receipt records.");
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load receipt records."));
   return (data ?? []).map((row: Record<string, unknown>, index) => ({
     id: String(row.id),
     userId: String(row.user_id),
@@ -445,7 +577,7 @@ export async function getReceipts(userId?: string): Promise<Receipt[]> {
 }
 
 export async function updatePassword(userId: string, password: string): Promise<void> {
-  const currentUser = await getCurrentUser();
+  const currentUser = await getValidatedCurrentUser();
   if (!currentUser || currentUser.id !== userId) throw new Error("You must be signed in to update your password.");
   const { error } = await supabase.auth.updateUser({ password });
   if (error) throw new Error("Could not update the password. Please try again.");
@@ -458,7 +590,7 @@ export function hasLegacyLocalStorageData(): boolean {
 
 export async function importLegacyLocalStorageData(): Promise<{ importedMembersCount: number; importedReceiptsCount: number }> {
   if (typeof window === "undefined") return { importedMembersCount: 0, importedReceiptsCount: 0 };
-  const currentUser = await getCurrentUser();
+  const currentUser = await getValidatedCurrentUser();
   if (!currentUser) throw new Error("Sign in before importing legacy data.");
 
   const legacyMembers: Partial<Member>[] = [];

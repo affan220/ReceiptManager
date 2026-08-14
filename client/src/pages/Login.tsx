@@ -1,11 +1,15 @@
 import { useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth-context";
-import { login } from "@/lib/DatabaseService";
+import { ActiveSessionError, login } from "@/lib/DatabaseService";
 import { normalizeUsername } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { Loader2, LogIn } from "lucide-react";
 
@@ -18,12 +22,11 @@ export default function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeSessionDevice, setActiveSessionDevice] = useState<string | null>(null);
 
   if (!loading && user) return <Navigate to={from} replace />;
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const attemptLogin = async (takeOver = false) => {
     const normalizedUsername = normalizeUsername(username);
     if (!normalizedUsername) {
       toast.error("Please enter your username.");
@@ -36,14 +39,24 @@ export default function Login() {
 
     setBusy(true);
     try {
-      await login(normalizedUsername, password);
-      toast.success("Welcome back!");
+      await login(normalizedUsername, password, takeOver);
+      setActiveSessionDevice(null);
+      toast.success(takeOver ? "Previous session has been logged out. You are now signed in on this device." : "Welcome back!");
       navigate(from, { replace: true });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Invalid username or password.");
+      if (error instanceof ActiveSessionError) {
+        setActiveSessionDevice(error.deviceLabel ?? "another device");
+      } else {
+        toast.error(error instanceof Error ? error.message : "Invalid username or password.");
+      }
     } finally {
       setBusy(false);
     }
+  };
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await attemptLogin(false);
   };
 
   return (
@@ -84,6 +97,24 @@ export default function Login() {
           Create one
         </Link>
       </p>
+
+      <AlertDialog open={activeSessionDevice !== null} onOpenChange={(open) => { if (!open) setActiveSessionDevice(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Account already active</AlertDialogTitle>
+            <AlertDialogDescription>
+              This account is already logged in on another device{activeSessionDevice ? ` (${activeSessionDevice})` : ""}. You can cancel and remain logged out, or end the previous device session and continue here.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} onClick={() => { void attemptLogin(true); }}>
+              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Log Out Previous Device & Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AuthLayout>
   );
 }

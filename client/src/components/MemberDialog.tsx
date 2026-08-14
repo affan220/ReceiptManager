@@ -21,7 +21,7 @@ interface Props {
 }
 
 export function MemberDialog({ open, onOpenChange, member }: Props) {
-  const { addMember, updateMember } = useApp();
+  const { addMember, getMember, updateMember } = useApp();
   const isEdit = !!member;
   const [form, setForm] = useState<Partial<Member>>({});
   const [busy, setBusy] = useState(false);
@@ -32,20 +32,26 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
   const today = new Date().toISOString().slice(0, 10);
 
   useEffect(() => {
-    if (open) {
-      const now = new Date();
-      setForm(
-        member
-          ? { ...member, payment_mode: member.payment_mode ?? "cash" }
-          : {
-              name: "", phone: "", amount: 0, status: "unpaid", payment_mode: "cash",
-              month: now.getMonth() + 1, year: now.getFullYear(),
-              hold: false, months_pending: 0,
-              payment_date: null, voucher_number: null,
-            }
-      );
+    let active = true;
+    if (!open) return () => { active = false; };
+
+    const now = new Date();
+    if (!member) {
+      setForm({
+        name: "", phone: "", amount: 0, status: "unpaid", payment_mode: "cash",
+        month: now.getMonth() + 1, year: now.getFullYear(),
+        hold: false, months_pending: 0,
+        payment_date: null, voucher_number: null,
+      });
+      return () => { active = false; };
     }
-  }, [open, member]);
+
+    setForm({ ...member, payment_mode: member.payment_mode ?? "cash" });
+    void getMember(member.id).then((latest) => {
+      if (active && latest) setForm({ ...latest, payment_mode: latest.payment_mode ?? "cash" });
+    });
+    return () => { active = false; };
+  }, [open, member, getMember]);
 
   useEffect(() => {
     let active = true;
@@ -68,7 +74,10 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
     setBusy(true);
     try {
       if (isEdit && member) {
-        await updateMember(member.id, form);
+        const updated = await updateMember(member.id, form);
+        setForm({ ...updated, payment_mode: updated.payment_mode ?? "cash" });
+        const history = await getMemberPayments(updated.id);
+        setPaymentHistory(history);
         toast.success("Member updated");
         onOpenChange(false);
       } else {

@@ -1,16 +1,19 @@
-import { createContext, useContext, useEffect, useMemo, useState, ReactNode, useCallback } from "react";
-import { Member, OrgSettings, defaultSettings } from "./store";
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { ImportMemberInput, Member, OrgSettings, defaultSettings } from "./store";
 import { useAuth } from "./auth-context";
 import { toast } from "sonner";
 import {
-  initializeDatabase,
+  BulkImportResult,
   addMember as dbAddMember,
-  updateMember as dbUpdateMember,
+  bulkImportMembers as dbBulkImportMembers,
   deleteMember as dbDeleteMember,
+  getMember as dbGetMember,
   getMembers as dbGetMembers,
-  saveSettings as dbSaveSettings,
-  loadSettings as dbLoadSettings,
+  initializeDatabase,
   loadProfile as dbLoadProfile,
+  loadSettings as dbLoadSettings,
+  saveSettings as dbSaveSettings,
+  updateMember as dbUpdateMember,
 } from "./DatabaseService";
 
 interface Profile {
@@ -28,8 +31,9 @@ interface AppCtx {
   profile: Profile | null;
   loading: boolean;
   addMember: (m: Partial<Member>) => Promise<Member | null>;
-  addMembers: (list: Partial<Member>[]) => Promise<number>;
-  updateMember: (id: string, patch: Partial<Member>) => Promise<void>;
+  addMembers: (list: ImportMemberInput[]) => Promise<BulkImportResult>;
+  getMember: (id: string) => Promise<Member | null>;
+  updateMember: (id: string, patch: Partial<Member>) => Promise<Member>;
   deleteMember: (id: string) => Promise<void>;
   toggleHold: (id: string) => Promise<void>;
   setStatus: (id: string, status: Member["status"]) => Promise<void>;
@@ -38,58 +42,6 @@ interface AppCtx {
 }
 
 const Ctx = createContext<AppCtx | null>(null);
-
-type DbMember = {
-  id: string;
-  user_id: string;
-  name: string;
-  phone: string;
-  amount: number | string;
-  status: string;
-  month: number;
-  year: number;
-  hold: boolean;
-  months_pending: number;
-  payment_date: string | null;
-  voucher_number: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-function rowToMember(r: DbMember): Member {
-  return {
-    id: r.id,
-    name: r.name,
-    phone: r.phone ?? "",
-    amount: Number(r.amount),
-    status: (r.status as Member["status"]) ?? "unpaid",
-    month: r.month,
-    year: r.year,
-    hold: !!r.hold,
-    months_pending: r.months_pending ?? 0,
-    payment_date: r.payment_date ?? null,
-    voucher_number: r.voucher_number ?? null,
-    created_at: r.created_at,
-    updated_at: r.updated_at,
-  };
-}
-
-function memberToInsert(m: Partial<Member>, userId: string) {
-  const now = new Date();
-  return {
-    user_id: userId,
-    name: m.name ?? "",
-    phone: m.phone ?? "",
-    amount: Number(m.amount ?? 0),
-    status: (m.status ?? "unpaid") as Member["status"],
-    month: m.month ?? now.getMonth() + 1,
-    year: m.year ?? now.getFullYear(),
-    hold: !!m.hold,
-    months_pending: m.months_pending ?? 0,
-    payment_date: m.payment_date || null,
-    voucher_number: m.voucher_number?.trim() || null,
-  };
-}
 
 function sanitizeMemberPatch(patch: Partial<Member>) {
   const cleaned = { ...patch } as Partial<Member> & { id?: string; created_at?: string; updated_at?: string };
@@ -102,15 +54,11 @@ function sanitizeMemberPatch(patch: Partial<Member>) {
   if (cleaned.year !== undefined) cleaned.year = Number(cleaned.year);
   if (cleaned.hold !== undefined) cleaned.hold = Boolean(cleaned.hold);
   if (cleaned.months_pending !== undefined) cleaned.months_pending = Number(cleaned.months_pending);
-  if (cleaned.payment_mode !== undefined) {
-    cleaned.payment_mode = cleaned.payment_mode === "account" ? "account" : "cash";
-  }
+  if (cleaned.payment_mode !== undefined) cleaned.payment_mode = cleaned.payment_mode === "account" ? "account" : "cash";
   if (cleaned.payment_date !== undefined) cleaned.payment_date = cleaned.payment_date || null;
   if (cleaned.voucher_number !== undefined) cleaned.voucher_number = cleaned.voucher_number?.trim() || null;
-
   return cleaned as Partial<Member>;
 }
-
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -136,7 +84,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         dbLoadSettings(user.id),
         dbLoadProfile(user.id).catch(() => null),
       ]);
-
       setMembers(membersList);
       if (savedSettings) {
         setSettings({ ...defaultSettings, ...savedSettings });
@@ -164,13 +111,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [user]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { void loadAll(); }, [loadAll]);
 
-  const addMember = useCallback(async (m: Partial<Member>) => {
+  const addMember = useCallback(async (member: Partial<Member>) => {
     if (!user) return null;
     try {
-      const created = await dbAddMember(user.id, m);
-      setMembers((prev) => [created, ...prev]);
+      const created = await dbAddMember(user.id, member);
+      setMembers((previous) => [created, ...previous]);
+      await loadAll();
       toast.success("Member added successfully");
       return created;
     } catch (error) {
@@ -178,85 +126,103 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.error(error instanceof Error ? error.message : "Could not add member.");
       return null;
     }
-  }, [user]);
+  }, [user, loadAll]);
 
-  const addMembers = useCallback(async (list: Partial<Member>[]) => {
-    if (!user || !list.length) return 0;
-    const created: Member[] = [];
+  const addMembers = useCallback(async (list: ImportMemberInput[]) => {
+    if (!user || !list.length) return { importedCount: 0, failedCount: 0, errors: [] };
     try {
-      for (const member of list) {
-        const added = await dbAddMember(user.id, member);
-        created.push(added);
+      const result = await dbBulkImportMembers(list);
+      await loadAll();
+      if (result.importedCount > 0) {
+        toast.success(`${result.importedCount} member${result.importedCount === 1 ? "" : "s"} imported successfully`);
       }
-      setMembers((prev) => [...created, ...prev]);
-      toast.success(`${created.length} member${created.length === 1 ? "" : "s"} imported successfully`);
-      return created.length;
+      return result;
     } catch (error) {
-      console.error("[members] bulk insert error:", error);
-      toast.error(error instanceof Error ? error.message : "Could not import members.");
-      return created.length;
+      console.error("[members] bulk import error:", error);
+      const message = error instanceof Error ? error.message : "Could not import members.";
+      toast.error(message);
+      throw error;
+    }
+  }, [user, loadAll]);
+
+  const getMember = useCallback(async (id: string) => {
+    if (!user) return null;
+    try {
+      const latest = await dbGetMember(id, user.id);
+      if (latest) setMembers((previous) => previous.map((member) => member.id === id ? latest : member));
+      return latest;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load the current member record.");
+      return null;
     }
   }, [user]);
 
   const updateMember = useCallback(async (id: string, patch: Partial<Member>) => {
-    if (!user) return;
+    if (!user) throw new Error("Sign in before editing a member.");
     try {
       const updated = await dbUpdateMember(id, user.id, sanitizeMemberPatch(patch));
-      setMembers((prev) => prev.map((m) => (m.id === id ? updated : m)));
+      setMembers((previous) => previous.map((member) => member.id === id ? updated : member));
+      await loadAll();
+      return updated;
     } catch (error) {
       console.error("[members] update error:", error);
-      toast.error(error instanceof Error ? error.message : "Could not update member.");
+      const message = error instanceof Error ? error.message : "Could not update member.";
+      toast.error(message);
+      throw error;
     }
-  }, [user]);
+  }, [user, loadAll]);
 
   const deleteMember = useCallback(async (id: string) => {
     if (!user) return;
     try {
       await dbDeleteMember(id, user.id);
-      setMembers((prev) => prev.filter((m) => m.id !== id));
+      setMembers((previous) => previous.filter((member) => member.id !== id));
+      await loadAll();
     } catch (error) {
       console.error("[members] delete error:", error);
       toast.error(error instanceof Error ? error.message : "Could not delete member.");
+      throw error;
     }
-  }, [user]);
+  }, [user, loadAll]);
 
   const toggleHold = useCallback(async (id: string) => {
-    const target = members.find((m) => m.id === id);
+    const target = members.find((member) => member.id === id);
     if (!target) return;
     await updateMember(id, { hold: !target.hold });
   }, [members, updateMember]);
 
   const setStatus = useCallback(async (id: string, status: Member["status"]) => {
-    const target = members.find((m) => m.id === id);
+    const target = members.find((member) => member.id === id);
     if (!target) return;
     const patch: Partial<Member> = { status };
     if (status === "paid") patch.months_pending = 0;
     await updateMember(id, patch);
   }, [members, updateMember]);
 
-  const updateSettings = useCallback(async (s: OrgSettings) => {
+  const updateSettings = useCallback(async (nextSettings: OrgSettings) => {
     if (!user) return;
     try {
-      await dbSaveSettings(user.id, s);
-      setSettings(s);
+      await dbSaveSettings(user.id, nextSettings);
+      setSettings(nextSettings);
       toast.success("Settings saved");
     } catch (error) {
       console.error("[settings] save error:", error);
       toast.error(error instanceof Error ? error.message : "Could not save settings.");
+      throw error;
     }
   }, [user]);
 
   const value = useMemo<AppCtx>(() => ({
     members, settings, profile, loading,
-    addMember, addMembers, updateMember, deleteMember, toggleHold, setStatus,
+    addMember, addMembers, getMember, updateMember, deleteMember, toggleHold, setStatus,
     updateSettings, refresh: loadAll,
-  }), [members, settings, profile, loading, addMember, addMembers, updateMember, deleteMember, toggleHold, setStatus, updateSettings, loadAll]);
+  }), [members, settings, profile, loading, addMember, addMembers, getMember, updateMember, deleteMember, toggleHold, setStatus, updateSettings, loadAll]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useApp() {
-  const v = useContext(Ctx);
-  if (!v) throw new Error("useApp must be used within AppProvider");
-  return v;
+  const value = useContext(Ctx);
+  if (!value) throw new Error("useApp must be used within AppProvider");
+  return value;
 }
