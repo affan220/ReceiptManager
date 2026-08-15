@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatCard } from "@/components/StatCard";
 import { MemberCard } from "@/components/MemberCard";
@@ -10,8 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Users, CheckCircle2, XCircle, Clock, Wallet, TrendingUp, AlertTriangle, Percent, Plus, Search, Building2 } from "lucide-react";
-
-import { hasLegacyLocalStorageData, importLegacyLocalStorageData } from "@/lib/DatabaseService";
+import { LedgerDashboardSummary, hasLegacyLocalStorageData, importLegacyLocalStorageData } from "@/lib/DatabaseService";
 import { toast } from "sonner";
 
 const ALL = "all";
@@ -26,13 +25,17 @@ function readStoredValue(key: string, fallback: string) {
 }
 
 function saveStoredValue(key: string, value: string) {
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem(key, value);
-  }
+  if (typeof window !== "undefined") window.localStorage.setItem(key, value);
 }
 
+const emptySummary: LedgerDashboardSummary = {
+  total: 0, paid: 0, unpaid: 0, pending: 0, partial: 0, expectedDues: 0,
+  monthlyCollection: 0, yearlyCollection: 0, outstanding: 0, cashReceived: 0,
+  accountReceived: 0, collectionPercent: 0,
+};
+
 export default function Dashboard() {
-  const { members, settings, refresh } = useApp();
+  const { members, settings, refresh, getDashboardSummary } = useApp();
   const now = new Date();
   const [month, setMonth] = useState<string>(() => readStoredValue(DASHBOARD_MONTH_KEY, String(now.getMonth() + 1)));
   const [year, setYear] = useState<string>(() => readStoredValue(DASHBOARD_YEAR_KEY, String(now.getFullYear())));
@@ -42,12 +45,24 @@ export default function Dashboard() {
   const [open, setOpen] = useState(false);
   const [hasLegacyData, setHasLegacyData] = useState(() => hasLegacyLocalStorageData());
   const [importing, setImporting] = useState(false);
+  const [ledgerSummary, setLedgerSummary] = useState<LedgerDashboardSummary>(emptySummary);
+
+  const selectedMonth = month === ALL ? null : Number(month);
+  const selectedYear = year === ALL ? null : Number(year);
+
+  useEffect(() => {
+    let active = true;
+    void getDashboardSummary(selectedMonth, selectedYear)
+      .then((summary) => { if (active) setLedgerSummary(summary); })
+      .catch(() => { if (active) setLedgerSummary(emptySummary); });
+    return () => { active = false; };
+  }, [getDashboardSummary, selectedMonth, selectedYear, members]);
 
   const handleImportLegacyData = async () => {
     setImporting(true);
     try {
       const res = await importLegacyLocalStorageData();
-      toast.success(`Imported ${res.importedMembersCount} members and ${res.importedReceiptsCount} receipts to cloud!`);
+      toast.success(`Imported ${res.importedMembersCount} monthly contribution records to cloud.`);
       setHasLegacyData(false);
       await refresh();
     } catch (error) {
@@ -64,42 +79,27 @@ export default function Dashboard() {
     const set = new Set<number>(members.map((m) => m.year));
     set.add(now.getFullYear());
     return Array.from(set).sort((a, b) => b - a);
-  }, [members]);
+  }, [members, now]);
 
-  const filtered = useMemo(() => {
-    return members.filter((m) => {
-      if (month !== ALL && m.month !== Number(month)) return false;
-      if (year !== ALL && m.year !== Number(year)) return false;
-      const matchesStatus = m.hold
-        ? statuses.includes(HOLD as StatusFilterValue) || statuses.includes(m.status as StatusFilterValue)
-        : statuses.includes(m.status as StatusFilterValue);
-      if (!matchesStatus) return false;
-      if (search && !`${m.name} ${m.phone} ${m.payment_mode ?? "cash"}`.toLowerCase().includes(search.toLowerCase())) return false;
-      return true;
-    });
-  }, [members, month, year, statuses, search]);
+  const filtered = useMemo(() => members.filter((member) => {
+    if (month !== ALL && member.month !== Number(month)) return false;
+    if (year !== ALL && member.year !== Number(year)) return false;
+    const comparableStatus = member.status === "partial" ? "pending" : member.status;
+    const matchesStatus = member.hold
+      ? statuses.includes(HOLD as StatusFilterValue) || statuses.includes(comparableStatus as StatusFilterValue)
+      : statuses.includes(comparableStatus as StatusFilterValue);
+    if (!matchesStatus) return false;
+    if (search && !`${member.name} ${member.phone} ${member.payment_mode ?? "cash"} ${member.voucher_number ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  }), [members, month, year, statuses, search]);
 
   const stats = useMemo(() => {
     const total = filtered.length;
-    const paid = filtered.filter((m) => m.status === "paid").length;
-    const unpaid = filtered.filter((m) => m.status === "unpaid").length;
-    const pending = filtered.filter((m) => m.status === "pending").length;
-    const monthly = filtered.filter((m) => m.status === "paid").reduce((s, m) => s + m.amount, 0);
-    const yearly = members
-      .filter((m) => m.year === Number(year === ALL ? now.getFullYear() : year) && m.status === "paid")
-      .reduce((s, m) => s + m.amount, 0);
-    const outstanding = filtered
-      .filter((m) => m.status !== "paid")
-      .reduce((s, m) => s + m.amount * Math.max(1, m.months_pending || 1), 0);
-    const cashReceived = filtered
-      .filter((m) => m.status === "paid" && (m.payment_mode ?? "cash") === "cash")
-      .reduce((s, m) => s + m.amount, 0);
-    const accountReceived = filtered
-      .filter((m) => m.status === "paid" && m.payment_mode === "account")
-      .reduce((s, m) => s + m.amount, 0);
-    const pct = total ? Math.round((paid / total) * 100) : 0;
-    return { total, paid, unpaid, pending, monthly, yearly, outstanding, cashReceived, accountReceived, pct };
-  }, [filtered, members, year]);
+    const paid = filtered.filter((member) => member.status === "paid").length;
+    const unpaid = filtered.filter((member) => member.status === "unpaid").length;
+    const pending = filtered.filter((member) => member.status === "pending" || member.status === "partial").length;
+    return { total, paid, unpaid, pending, ...ledgerSummary };
+  }, [filtered, ledgerSummary]);
 
   const c = settings.currency;
 
@@ -114,86 +114,40 @@ export default function Dashboard() {
   };
 
   return (
-    <AppShell
-      title="Dashboard"
-      subtitle={`Overview of contributions and collections - ${selectedMonthLabel} ${selectedYearLabel}`}
-    >
+    <AppShell title="Dashboard" subtitle={`Overview of contributions and collections - ${selectedMonthLabel} ${selectedYearLabel}`}>
       {hasLegacyData && (
-        <div className="mb-6 p-4 rounded-lg bg-amber-500/10 border border-amber-500/30 flex flex-wrap items-center justify-between gap-4">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
           <div className="flex items-center gap-3">
-            <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0" />
-            <div>
-              <p className="font-medium text-amber-200">Legacy LocalStorage Data Found</p>
-              <p className="text-xs text-amber-300/80">You have offline records stored in your browser. Click to migrate them to your cloud PostgreSQL database.</p>
-            </div>
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
+            <div><p className="font-medium text-amber-200">Legacy LocalStorage Data Found</p><p className="text-xs text-amber-300/80">You have offline records stored in your browser. Click to migrate them to your cloud PostgreSQL database.</p></div>
           </div>
-          <Button onClick={handleImportLegacyData} disabled={importing} size="sm" className="bg-amber-600 hover:bg-amber-700 text-white">
-            {importing ? "Importing..." : "Import Existing Data"}
-          </Button>
+          <Button onClick={handleImportLegacyData} disabled={importing} size="sm" className="bg-amber-600 text-white hover:bg-amber-700">{importing ? "Importing..." : "Import Existing Data"}</Button>
         </div>
       )}
 
-      {/* Filters */}
-      <div className="card-surface p-4 mb-6 flex flex-wrap items-center gap-3">
-        <div className="relative min-w-[200px] flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name, phone, cash or account..."
-            className="pl-9"
-          />
-        </div>
-        <Select value={month} onValueChange={handleMonthChange}>
-          <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All months</SelectItem>
-            {MONTHS.map((m, i) => <SelectItem key={m} value={String(i + 1)}>{m}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={year} onValueChange={handleYearChange}>
-          <SelectTrigger className="w-[110px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All years</SelectItem>
-            {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
-          </SelectContent>
-        </Select>
+      <div className="card-surface mb-6 flex flex-wrap items-center gap-3 p-4">
+        <div className="relative min-w-[200px] flex-1"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name, phone, cash or account..." className="pl-9" /></div>
+        <Select value={month} onValueChange={handleMonthChange}><SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value={ALL}>All months</SelectItem>{MONTHS.map((label, index) => <SelectItem key={label} value={String(index + 1)}>{label}</SelectItem>)}</SelectContent></Select>
+        <Select value={year} onValueChange={handleYearChange}><SelectTrigger className="w-[110px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value={ALL}>All years</SelectItem>{years.map((item) => <SelectItem key={item} value={String(item)}>{item}</SelectItem>)}</SelectContent></Select>
         <StatusMultiSelect value={statuses} onValueChange={setStatuses} className="w-[180px]" />
-        <Button onClick={() => { setEditing(null); setOpen(true); }}>
-          <Plus className="mr-1.5 h-4 w-4" /> Add member
-        </Button>
+        <Button onClick={() => { setEditing(null); setOpen(true); }}><Plus className="mr-1.5 h-4 w-4" /> Add member</Button>
       </div>
 
-      {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 mb-6">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         <StatCard label="Total Members" value={stats.total} icon={Users} tone="primary" />
         <StatCard label="Paid" value={stats.paid} icon={CheckCircle2} tone="success" />
         <StatCard label="Unpaid" value={stats.unpaid} icon={XCircle} tone="destructive" />
         <StatCard label="Pending" value={stats.pending} icon={Clock} tone="warning" />
-        <StatCard label="Monthly Collection" value={`${c}${stats.monthly.toLocaleString()}`} icon={Wallet} tone="primary" hint={`${selectedMonthLabel} ${selectedYearLabel}`} />
-        <StatCard label="Yearly Collection" value={`${c}${stats.yearly.toLocaleString()}`} icon={TrendingUp} tone="success" />
+        <StatCard label="Monthly Collection" value={`${c}${stats.monthlyCollection.toLocaleString()}`} icon={Wallet} tone="primary" hint="Actual payments received" />
+        <StatCard label="Yearly Collection" value={`${c}${stats.yearlyCollection.toLocaleString()}`} icon={TrendingUp} tone="success" />
         <StatCard label="Outstanding" value={`${c}${stats.outstanding.toLocaleString()}`} icon={AlertTriangle} tone="destructive" />
         <StatCard label="Cash Received" value={`${c}${stats.cashReceived.toLocaleString()}`} icon={Wallet} tone="success" />
         <StatCard label="Account Received" value={`${c}${stats.accountReceived.toLocaleString()}`} icon={Building2} tone="info" />
-        <StatCard label="Collection %" value={`${stats.pct}%`} icon={Percent} tone="accent" hint={`${stats.paid} of ${stats.total} paid`} />
+        <StatCard label="Collection %" value={`${stats.collectionPercent.toLocaleString()}%`} icon={Percent} tone="accent" hint={`${c}${stats.expectedDues.toLocaleString()} expected dues`} />
       </div>
 
-      {/* Members */}
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="font-display text-lg font-semibold">Members ({filtered.length})</h2>
-      </div>
-
-      {filtered.length === 0 ? (
-        <div className="card-surface p-12 text-center">
-          <p className="text-muted-foreground">No members match the current filters.</p>
-        </div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filtered.map((m) => (
-            <MemberCard key={m.id} member={m} onEdit={(mb) => { setEditing(mb); setOpen(true); }} />
-          ))}
-        </div>
-      )}
+      <div className="mb-3 flex items-center justify-between"><h2 className="font-display text-lg font-semibold">Members ({filtered.length})</h2></div>
+      {filtered.length === 0 ? <div className="card-surface p-12 text-center"><p className="text-muted-foreground">No members match the current filters.</p></div> : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{filtered.map((item) => <MemberCard key={item.id} member={item} onEdit={(selected) => { setEditing(selected); setOpen(true); }} />)}</div>}
 
       <MemberDialog open={open} onOpenChange={setOpen} member={editing} />
     </AppShell>

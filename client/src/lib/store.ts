@@ -1,13 +1,17 @@
 // Schema kept stable so a Python/Kivy mirror app can use the same field names.
 
-export type MemberStatus = "paid" | "unpaid" | "pending";
+export type MemberStatus = "paid" | "unpaid" | "pending" | "partial";
 export type PaymentMode = "cash" | "account";
 
 export interface Member {
   id: string;
+  member_identity_id?: string;
   name: string;
   phone: string;
   amount: number;
+  amount_paid: number;
+  amount_pending: number;
+  total_pending_amount: number;
   status: MemberStatus;
   payment_mode?: PaymentMode;
   month: number;
@@ -16,8 +20,31 @@ export interface Member {
   months_pending: number;
   payment_date: string | null;
   voucher_number: string | null;
+  legacy_review_required?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface PaymentAllocationInput {
+  monthly_due_id: string;
+  allocated_amount: number;
+}
+
+export interface NewMemberInput {
+  name: string;
+  phone: string;
+  amount: number;
+  status: MemberStatus;
+  payment_mode: PaymentMode;
+  month: number;
+  year: number;
+  all_months?: boolean;
+  hold: boolean;
+  payment_date: string | null;
+  voucher_number: string | null;
+  payment_amount?: number;
+  payment_notes?: string;
+  allocations?: PaymentAllocationInput[] | null;
 }
 
 export interface ImportMemberInput {
@@ -32,6 +59,7 @@ export interface ImportMemberInput {
   months_pending: string;
   payment_date: string;
   voucher_number: string;
+  payment_amount: string;
 }
 
 export interface OrgSettings {
@@ -129,14 +157,15 @@ export function parseDelimited(text: string): ImportMemberInput[] {
       rowNumber: index + 2,
       name: firstValue(row, ["name", "member", "member_name", "full_name"]),
       phone: firstValue(row, ["phone", "mobile", "phone_number"]),
-      amount: firstValue(row, ["amount", "payment_amount"]),
+      amount: firstValue(row, ["amount", "monthly_amount", "due_amount"]),
       status: firstValue(row, ["status", "payment_status"]) || "unpaid",
       payment_mode: firstValue(row, ["payment_mode", "paymentmethod", "payment_method", "paymentmode", "mode"]) || "cash",
       month: firstValue(row, ["month"]),
       year: firstValue(row, ["year"]),
       months_pending: firstValue(row, ["months_pending", "pending_months", "pending"]) || "0",
       payment_date: firstValue(row, ["payment_date", "paymentdate", "date"]),
-      voucher_number: firstValue(row, ["voucher_number", "voucher", "voucher_no", "voucher_number"]),
+      voucher_number: firstValue(row, ["voucher_number", "voucher", "voucher_no"]),
+      payment_amount: firstValue(row, ["payment_amount", "actual_payment_amount", "amount_received", "received_amount"]),
     };
   });
 }

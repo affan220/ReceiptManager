@@ -1,21 +1,22 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatCard } from "@/components/StatCard";
 import { StatusMultiSelect, type StatusFilterValue } from "@/components/StatusMultiSelect";
 import { useApp } from "@/lib/app-context";
 import { MONTHS } from "@/lib/store";
+import { PaymentRecord, getPayments } from "@/lib/DatabaseService";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Wallet, Users, CheckCircle2, AlertTriangle, FileDown, FileSpreadsheet, FileText, ArrowUpDown, Search } from "lucide-react";
+import { Wallet, Users, CheckCircle2, AlertTriangle, FileDown, FileSpreadsheet, FileText, Search } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 
-type SortKey = "name" | "amount" | "month" | "year" | "status" | "payment_mode" | "payment_date" | "voucher_number";
 type PaymentDateRange = "all" | "today" | "week" | "month" | "custom";
+type ReportView = "dues" | "payments";
 const PAGE_SIZE = 10;
 const ALL_STATUSES: StatusFilterValue[] = ["paid", "unpaid", "pending", "hold"];
 
@@ -41,21 +42,16 @@ function formatPdfAmount(amount: number) {
   return `RS ${amount.toLocaleString()}`;
 }
 
-function getPendingAmounts(member: { amount: number; months_pending: number }) {
-  const pendingMonths = Number(member.months_pending ?? 0);
-  const monthlyPendingAmount = Number(member.amount ?? 0);
-  const totalPendingAmount = monthlyPendingAmount * Math.max(1, pendingMonths);
-  return { pendingMonths, monthlyPendingAmount, totalPendingAmount };
-}
-
-function getExportPendingAmounts(member: { amount: number; months_pending: number; status: string }) {
-  const pending = getPendingAmounts(member);
-  const totalPendingAmount = member.status === "paid" ? 0 : pending.totalPendingAmount;
-  return { ...pending, totalPendingAmount };
+function allocationsLabel(payment: PaymentRecord) {
+  return payment.allocations.length
+    ? payment.allocations.map((allocation) => `${MONTHS[allocation.month - 1]} ${allocation.year} (${allocation.allocatedAmount.toLocaleString()})`).join(", ")
+    : "—";
 }
 
 export default function Reports() {
   const { members, settings } = useApp();
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [view, setView] = useState<ReportView>("dues");
   const [search, setSearch] = useState("");
   const [statuses, setStatuses] = useState<StatusFilterValue[]>(ALL_STATUSES);
   const [month, setMonth] = useState("all");
@@ -63,270 +59,122 @@ export default function Reports() {
   const [paymentDateRange, setPaymentDateRange] = useState<PaymentDateRange>("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("name");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
 
-  const filtered = useMemo(() => {
-    let list = members.filter((m) => {
-      const matchesStatus = m.hold
-        ? statuses.includes("hold") || statuses.includes(m.status as StatusFilterValue)
-        : statuses.includes(m.status as StatusFilterValue);
-      if (!matchesStatus) return false;
-      if (month !== "all" && m.month !== Number(month)) return false;
-      if (paymentMode !== "all" && (m.payment_mode ?? "cash") !== paymentMode) return false;
-      if (!matchesPaymentDate(m.payment_date, paymentDateRange, dateFrom, dateTo)) return false;
-      if (search && !`${m.name} ${m.phone} ${m.payment_mode ?? "cash"} ${m.voucher_number ?? ""} ${m.payment_date ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false;
-      return true;
-    });
-    list = [...list].sort((a, b) => {
-      const va = (a as any)[sortKey] ?? "";
-      const vb = (b as any)[sortKey] ?? "";
-      if (va < vb) return sortDir === "asc" ? -1 : 1;
-      if (va > vb) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    });
-    return list;
-  }, [members, search, statuses, month, paymentMode, paymentDateRange, dateFrom, dateTo, sortKey, sortDir]);
-
-  const paged = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE;
-    return filtered.slice(start, start + PAGE_SIZE);
-  }, [filtered, page]);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-
-  const summary = useMemo(() => {
-    const totalCollected = members.filter((m) => m.status === "paid").reduce((s, m) => s + m.amount, 0);
-    const outstanding = members
-      .filter((m) => m.status !== "paid")
-      .reduce((s, m) => s + m.amount * Math.max(1, m.months_pending || 1), 0);
-    const paidCount = members.filter((m) => m.status === "paid").length;
-    return { totalCollected, outstanding, paidCount, total: members.length };
+  useEffect(() => {
+    let active = true;
+    void getPayments().then((rows) => { if (active) setPayments(rows); }).catch(() => { if (active) setPayments([]); });
+    return () => { active = false; };
   }, [members]);
 
-  const toggleSort = (k: SortKey) => {
-    if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortKey(k);
-      setSortDir("asc");
-    }
-  };
+  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
 
+  const filteredDues = useMemo(() => members.filter((member) => {
+    const comparableStatus = member.status === "partial" ? "pending" : member.status;
+    const matchesStatus = member.hold ? statuses.includes("hold") || statuses.includes(comparableStatus as StatusFilterValue) : statuses.includes(comparableStatus as StatusFilterValue);
+    if (!matchesStatus) return false;
+    if (month !== "all" && member.month !== Number(month)) return false;
+    if (paymentMode !== "all" && (member.payment_mode ?? "cash") !== paymentMode) return false;
+    if (!matchesPaymentDate(member.payment_date, paymentDateRange, dateFrom, dateTo)) return false;
+    if (search && !`${member.name} ${member.phone} ${member.payment_mode ?? "cash"} ${member.voucher_number ?? ""} ${member.payment_date ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  }), [members, search, statuses, month, paymentMode, paymentDateRange, dateFrom, dateTo]);
+
+  const filteredPayments = useMemo(() => payments.filter((payment) => {
+    if (paymentMode !== "all" && payment.paymentMethod !== paymentMode) return false;
+    if (!matchesPaymentDate(payment.paymentDate, paymentDateRange, dateFrom, dateTo)) return false;
+    const member = memberById.get(payment.memberId);
+    const searchable = `${member?.name ?? ""} ${member?.phone ?? ""} ${payment.voucherNumber} ${payment.paymentMethod} ${payment.paymentDate}`.toLowerCase();
+    if (search && !searchable.includes(search.toLowerCase())) return false;
+    if (month !== "all" && !payment.allocations.some((allocation) => allocation.month === Number(month))) return false;
+    return true;
+  }), [payments, memberById, paymentMode, paymentDateRange, dateFrom, dateTo, search, month]);
+
+  const summary = useMemo(() => {
+    const expectedDues = filteredDues.reduce((sum, member) => sum + member.amount, 0);
+    const actualCollected = filteredPayments.reduce((sum, payment) => sum + payment.amount, 0);
+    const outstanding = filteredDues.reduce((sum, member) => sum + member.amount_pending, 0);
+    const paidCount = filteredDues.filter((member) => member.status === "paid").length;
+    const collectionPercent = expectedDues ? Math.round((actualCollected / expectedDues) * 100) : 0;
+    return { expectedDues, actualCollected, outstanding, paidCount, total: filteredDues.length, collectionPercent };
+  }, [filteredDues, filteredPayments]);
+
+  const activeRows = view === "dues" ? filteredDues : filteredPayments;
+  const totalPages = Math.max(1, Math.ceil(activeRows.length / PAGE_SIZE));
+  const pagedDues = filteredDues.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pagedPayments = filteredPayments.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const c = settings.currency;
 
   const exportCSV = () => {
-    const headers = ["Name", "Phone", "Amount", "Status", "Payment Mode", "Payment Date", "Voucher Number", "Month", "Year", "Months Pending", "Monthly Pending", "Pending Total", "Hold"];
-    const rows = filtered.map((m) => {
-      const pending = getPendingAmounts(m);
-      return [
-        m.name,
-        m.phone,
-        m.amount,
-        m.status,
-        (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
-        m.payment_date ?? "",
-        m.voucher_number ?? "",
-        MONTHS[m.month - 1],
-        m.year,
-        pending.pendingMonths,
-        pending.monthlyPendingAmount,
-        pending.totalPendingAmount,
-        m.hold ? "Yes" : "No",
-      ];
-    });
-    const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `members-${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (view === "dues") {
+      const headers = ["Name", "Phone", "Monthly Amount", "Amount Received", "Pending Amount", "Status", "Payment Mode", "Payment Date", "Voucher Number", "Due Month", "Due Year", "Months Pending", "Total Pending Amount", "Hold"];
+      const rows = filteredDues.map((member) => [member.name, member.phone, member.amount, member.amount_paid, member.amount_pending, member.status, (member.payment_mode ?? "cash") === "account" ? "Account" : "Cash", member.payment_date ?? "", member.voucher_number ?? "", MONTHS[member.month - 1], member.year, member.months_pending, member.total_pending_amount, member.hold ? "Yes" : "No"]);
+      const csv = [headers, ...rows].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = `monthly-dues-${Date.now()}.csv`; anchor.click(); URL.revokeObjectURL(url);
+    } else {
+      const headers = ["Payment Date", "Voucher Number", "Member", "Actual Payment Amount", "Payment Mode", "Allocated Months", "Notes"];
+      const rows = filteredPayments.map((payment) => [payment.paymentDate, payment.voucherNumber, memberById.get(payment.memberId)?.name ?? "", payment.amount, payment.paymentMethod === "account" ? "Account" : "Cash", allocationsLabel(payment), payment.notes]);
+      const csv = [headers, ...rows].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = `payments-${Date.now()}.csv`; anchor.click(); URL.revokeObjectURL(url);
+    }
     toast.success("CSV exported");
   };
 
   const exportXLSX = () => {
-    const data = filtered.map((m) => {
-      const pending = getExportPendingAmounts(m);
-      return {
-        Name: m.name,
-        Phone: m.phone,
-        Amount: m.amount,
-        Status: m.status,
-        "Payment Mode": (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
-        "Payment Date": m.payment_date ?? "",
-        "Voucher Number": m.voucher_number ?? "",
-        Month: MONTHS[m.month - 1],
-        Year: m.year,
-        "Months Pending": pending.pendingMonths,
-        "Pending Total": pending.totalPendingAmount,
-        Hold: m.hold ? "Yes" : "No",
-      };
-    });
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Members");
-    XLSX.writeFile(wb, `members-${Date.now()}.xlsx`);
+    const data = view === "dues"
+      ? filteredDues.map((member) => ({ Name: member.name, Phone: member.phone, "Monthly Amount": member.amount, "Amount Received": member.amount_paid, "Pending Amount": member.amount_pending, Status: member.status, "Payment Mode": (member.payment_mode ?? "cash") === "account" ? "Account" : "Cash", "Payment Date": member.payment_date ?? "", "Voucher Number": member.voucher_number ?? "", "Due Month": MONTHS[member.month - 1], "Due Year": member.year, "Months Pending": member.months_pending, "Total Pending Amount": member.total_pending_amount, Hold: member.hold ? "Yes" : "No" }))
+      : filteredPayments.map((payment) => ({ "Payment Date": payment.paymentDate, "Voucher Number": payment.voucherNumber, Member: memberById.get(payment.memberId)?.name ?? "", "Actual Payment Amount": payment.amount, "Payment Mode": payment.paymentMethod === "account" ? "Account" : "Cash", "Allocated Months": allocationsLabel(payment), Notes: payment.notes }));
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, view === "dues" ? "Monthly Dues" : "Payments");
+    XLSX.writeFile(workbook, `${view}-${Date.now()}.xlsx`);
     toast.success("Excel exported");
   };
 
   const exportPDF = () => {
     const doc = new jsPDF();
     doc.setFontSize(16);
-    doc.text(`${settings.name} - Members Report`, 14, 18);
-    doc.setFontSize(10);
-    doc.setTextColor(120);
-    doc.text(`Generated ${new Date().toLocaleString()}`, 14, 25);
-    autoTable(doc, {
+    doc.text(`${settings.name} - ${view === "dues" ? "Monthly Dues" : "Actual Payments"} Report`, 14, 18);
+    doc.setFontSize(10); doc.setTextColor(120); doc.text(`Generated ${new Date().toLocaleString()}`, 14, 25);
+    autoTable(doc, view === "dues" ? {
       startY: 32,
-      head: [["Name", "Phone", "Amount", "Status", "Payment Mode", "Payment Date", "Voucher", "Period", "Months", "Pending Total"]],
-      body: filtered.map((m) => {
-        const pending = getExportPendingAmounts(m);
-        return [
-          m.name,
-          m.phone,
-          formatPdfAmount(m.amount),
-          m.status,
-          (m.payment_mode ?? "cash") === "account" ? "Account" : "Cash",
-          m.payment_date ?? "—",
-          m.voucher_number ?? "—",
-          `${MONTHS[m.month - 1]} ${m.year}`,
-          pending.pendingMonths,
-          formatPdfAmount(pending.totalPendingAmount),
-        ];
-      }),
-      headStyles: { fillColor: [20, 120, 90] },
-      styles: { fontSize: 9 },
+      head: [["Member", "Due", "Received", "Pending", "Status", "Payment Date", "Voucher", "Period"]],
+      body: filteredDues.map((member) => [member.name, formatPdfAmount(member.amount), formatPdfAmount(member.amount_paid), formatPdfAmount(member.amount_pending), member.status, member.payment_date ?? "—", member.voucher_number ?? "—", `${MONTHS[member.month - 1]} ${member.year}`]),
+      headStyles: { fillColor: [20, 120, 90] }, styles: { fontSize: 8 },
+    } : {
+      startY: 32,
+      head: [["Date", "Voucher", "Member", "Received", "Mode", "Allocated Months"]],
+      body: filteredPayments.map((payment) => [payment.paymentDate, payment.voucherNumber, memberById.get(payment.memberId)?.name ?? "—", formatPdfAmount(payment.amount), payment.paymentMethod === "account" ? "Account" : "Cash", allocationsLabel(payment)]),
+      headStyles: { fillColor: [20, 120, 90] }, styles: { fontSize: 8 },
     });
-    doc.save(`report-${Date.now()}.pdf`);
+    doc.save(`${view}-report-${Date.now()}.pdf`);
     toast.success("PDF exported");
   };
 
+  const resetPage = () => setPage(1);
+
   return (
-    <AppShell title="Reports" subtitle="Searchable, sortable contribution and member reports">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
-        <StatCard label="Total Collected" value={`${c}${summary.totalCollected.toLocaleString()}`} icon={Wallet} tone="success" />
-        <StatCard label="Outstanding" value={`${c}${summary.outstanding.toLocaleString()}`} icon={AlertTriangle} tone="destructive" />
-        <StatCard label="Members Paid" value={summary.paidCount} icon={CheckCircle2} tone="primary" />
-        <StatCard label="Total Members" value={summary.total} icon={Users} tone="accent" />
+    <AppShell title="Reports" subtitle="Searchable monthly dues, actual payment, and allocation reports">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><StatCard label="Actual Collected" value={`${c}${summary.actualCollected.toLocaleString()}`} icon={Wallet} tone="success" /><StatCard label="Outstanding" value={`${c}${summary.outstanding.toLocaleString()}`} icon={AlertTriangle} tone="destructive" /><StatCard label="Members Paid" value={summary.paidCount} icon={CheckCircle2} tone="primary" /><StatCard label="Expected Dues" value={`${c}${summary.expectedDues.toLocaleString()}`} icon={Users} tone="accent" /></div>
+
+      <div className="card-surface mb-4 flex flex-wrap items-center gap-3 p-4">
+        <div className="relative min-w-[190px] flex-1"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => { setSearch(event.target.value); resetPage(); }} placeholder="Search by name, phone, voucher, mode..." className="pl-9" /></div>
+        <Select value={view} onValueChange={(value) => { setView(value as ReportView); resetPage(); }}><SelectTrigger className="w-[155px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="dues">Monthly dues</SelectItem><SelectItem value="payments">Actual payments</SelectItem></SelectContent></Select>
+        {view === "dues" && <StatusMultiSelect value={statuses} onValueChange={(next) => { setStatuses(next); resetPage(); }} className="w-[180px]" />}
+        <Select value={paymentMode} onValueChange={(value) => { setPaymentMode(value as "all" | "cash" | "account"); resetPage(); }}><SelectTrigger className="w-[160px]"><SelectValue placeholder="Payment Mode" /></SelectTrigger><SelectContent><SelectItem value="all">All Payment Modes</SelectItem><SelectItem value="cash">Cash</SelectItem><SelectItem value="account">Account</SelectItem></SelectContent></Select>
+        <Select value={paymentDateRange} onValueChange={(value) => { setPaymentDateRange(value as PaymentDateRange); resetPage(); }}><SelectTrigger className="w-[150px]"><SelectValue placeholder="Payment date" /></SelectTrigger><SelectContent><SelectItem value="all">All payment dates</SelectItem><SelectItem value="today">Today</SelectItem><SelectItem value="week">This week</SelectItem><SelectItem value="month">This month</SelectItem><SelectItem value="custom">Custom range</SelectItem></SelectContent></Select>
+        {paymentDateRange === "custom" && <><Input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); resetPage(); }} className="w-[145px]" aria-label="Payment date from" /><Input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); resetPage(); }} className="w-[145px]" aria-label="Payment date to" /></>}
+        <Select value={month} onValueChange={(value) => { setMonth(value); resetPage(); }}><SelectTrigger className="w-[145px]"><SelectValue placeholder="All months" /></SelectTrigger><SelectContent><SelectItem value="all">All due months</SelectItem>{MONTHS.map((label, index) => <SelectItem key={label} value={String(index + 1)}>{label}</SelectItem>)}</SelectContent></Select>
+        <div className="flex gap-2"><Button variant="outline" onClick={exportCSV}><FileDown className="mr-1.5 h-4 w-4" /> CSV</Button><Button variant="outline" onClick={exportXLSX}><FileSpreadsheet className="mr-1.5 h-4 w-4" /> Excel</Button><Button onClick={exportPDF}><FileText className="mr-1.5 h-4 w-4" /> PDF</Button></div>
       </div>
 
-      <div className="card-surface p-4 mb-4 flex flex-wrap items-center gap-3">
-        <div className="relative min-w-[200px] flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search by name, phone, voucher, mode..." className="pl-9" />
-        </div>
-        <StatusMultiSelect value={statuses} onValueChange={(next) => { setStatuses(next); setPage(1); }} className="w-[180px]" />
-        <Select value={paymentMode} onValueChange={(v) => { setPaymentMode(v as "all" | "cash" | "account"); setPage(1); }}>
-          <SelectTrigger className="w-[160px]"><SelectValue placeholder="Payment Mode" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Payment Modes</SelectItem>
-            <SelectItem value="cash">💵 Cash</SelectItem>
-            <SelectItem value="account">🏦 Account</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={paymentDateRange} onValueChange={(v) => { setPaymentDateRange(v as PaymentDateRange); setPage(1); }}>
-          <SelectTrigger className="w-[150px]"><SelectValue placeholder="Payment date" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All payment dates</SelectItem>
-            <SelectItem value="today">Today</SelectItem>
-            <SelectItem value="week">This week</SelectItem>
-            <SelectItem value="month">This month</SelectItem>
-            <SelectItem value="custom">Custom range</SelectItem>
-          </SelectContent>
-        </Select>
-        {paymentDateRange === "custom" && (
-          <>
-            <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} className="w-[145px]" aria-label="Payment date from" />
-            <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="w-[145px]" aria-label="Payment date to" />
-          </>
-        )}
-        <Select value={month} onValueChange={(v) => { setMonth(v); setPage(1); }}>
-          <SelectTrigger className="w-[150px]"><SelectValue placeholder="All months" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All months</SelectItem>
-            {MONTHS.map((label, index) => (
-              <SelectItem key={label} value={String(index + 1)}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={exportCSV}><FileDown className="mr-1.5 h-4 w-4" /> CSV</Button>
-          <Button variant="outline" onClick={exportXLSX}><FileSpreadsheet className="mr-1.5 h-4 w-4" /> Excel</Button>
-          <Button onClick={exportPDF}><FileText className="mr-1.5 h-4 w-4" /> PDF</Button>
-        </div>
-      </div>
-
-      <div className="card-surface overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {([
-                  ["name", "Name"], ["amount", "Amount"], ["month", "Month"], ["year", "Year"], ["status", "Status"], ["payment_mode", "Payment Mode"], ["payment_date", "Payment Date"], ["voucher_number", "Voucher"]
-                ] as [SortKey, string][]).map(([k, label]) => (
-                  <TableHead key={k}>
-                    <button onClick={() => toggleSort(k)} className="inline-flex items-center gap-1 hover:text-foreground">
-                      {label} <ArrowUpDown className="h-3 w-3 opacity-60" />
-                    </button>
-                  </TableHead>
-                ))}
-                <TableHead>Phone</TableHead>
-                <TableHead className="text-right">Months Pending</TableHead>
-                <TableHead className="text-right">Monthly Pending</TableHead>
-                <TableHead className="text-right">Pending Total</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {paged.map((m) => {
-                const pending = getPendingAmounts(m);
-                const isAccount = (m.payment_mode ?? "cash") === "account";
-                return (
-                  <TableRow key={m.id}>
-                    <TableCell className="font-medium">{m.name}</TableCell>
-                    <TableCell>{c}{m.amount.toLocaleString()}</TableCell>
-                    <TableCell>{MONTHS[m.month - 1]}</TableCell>
-                    <TableCell>{m.year}</TableCell>
-                    <TableCell>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold uppercase ${
-                        m.status === "paid" ? "bg-success/15 text-success" :
-                        m.status === "unpaid" ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"
-                      }`}>{m.status}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        isAccount ? "bg-blue-500/15 text-blue-600 dark:text-blue-400" : "bg-success/15 text-success"
-                      }`}>
-                        {isAccount ? "🏦 Account" : "💵 Cash"}
-                      </span>
-                    </TableCell>
-                    <TableCell>{m.payment_date ? new Date(`${m.payment_date}T00:00:00`).toLocaleDateString() : "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">{m.voucher_number || "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{m.phone || "—"}</TableCell>
-                    <TableCell className="text-right">{pending.pendingMonths}</TableCell>
-                    <TableCell className="text-right">RS {pending.monthlyPendingAmount.toLocaleString()}</TableCell>
-                    <TableCell className="text-right">RS {pending.totalPendingAmount.toLocaleString()}</TableCell>
-                  </TableRow>
-                );
-              })}
-              {paged.length === 0 && (
-                <TableRow><TableCell colSpan={12} className="text-center py-10 text-muted-foreground">No results</TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-        <div className="flex items-center justify-between border-t border-border px-4 py-3">
-          <p className="text-xs text-muted-foreground">
-            Page {page} of {totalPages} · {filtered.length} records
-          </p>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
-            <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
-          </div>
-        </div>
-      </div>
+      <div className="card-surface overflow-hidden"><div className="overflow-x-auto"><Table>{view === "dues" ? <><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Due</TableHead><TableHead>Received</TableHead><TableHead>Pending</TableHead><TableHead>Status</TableHead><TableHead>Payment Mode</TableHead><TableHead>Payment Date</TableHead><TableHead>Voucher</TableHead><TableHead>Due Period</TableHead><TableHead className="text-right">Months Pending</TableHead></TableRow></TableHeader><TableBody>{pagedDues.map((member) => <TableRow key={member.id}><TableCell className="font-medium">{member.name}<div className="text-xs text-muted-foreground">{member.phone}</div></TableCell><TableCell>{c}{member.amount.toLocaleString()}</TableCell><TableCell>{c}{member.amount_paid.toLocaleString()}</TableCell><TableCell>{c}{member.amount_pending.toLocaleString()}</TableCell><TableCell><span className={`rounded-full px-2 py-0.5 text-xs font-semibold uppercase ${member.status === "paid" ? "bg-success/15 text-success" : member.status === "unpaid" ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"}`}>{member.status === "partial" ? "partial" : member.status}</span></TableCell><TableCell>{(member.payment_mode ?? "cash") === "account" ? "Account" : "Cash"}</TableCell><TableCell>{member.payment_date ? new Date(`${member.payment_date}T00:00:00`).toLocaleDateString() : "—"}</TableCell><TableCell className="font-mono text-xs">{member.voucher_number || "—"}</TableCell><TableCell>{MONTHS[member.month - 1]} {member.year}</TableCell><TableCell className="text-right">{member.months_pending}</TableCell></TableRow>)}{pagedDues.length === 0 && <TableRow><TableCell colSpan={10} className="py-10 text-center text-muted-foreground">No results</TableCell></TableRow>}</TableBody></> : <><TableHeader><TableRow><TableHead>Payment Date</TableHead><TableHead>Voucher</TableHead><TableHead>Member</TableHead><TableHead>Actual Amount</TableHead><TableHead>Mode</TableHead><TableHead>Allocated Months</TableHead><TableHead>Notes</TableHead></TableRow></TableHeader><TableBody>{pagedPayments.map((payment) => <TableRow key={payment.id}><TableCell>{new Date(`${payment.paymentDate}T00:00:00`).toLocaleDateString()}</TableCell><TableCell className="font-mono text-xs">{payment.voucherNumber}</TableCell><TableCell className="font-medium">{memberById.get(payment.memberId)?.name ?? "—"}</TableCell><TableCell>{c}{payment.amount.toLocaleString()}</TableCell><TableCell>{payment.paymentMethod === "account" ? "Account" : "Cash"}</TableCell><TableCell className="max-w-[260px] whitespace-normal text-xs">{allocationsLabel(payment)}</TableCell><TableCell className="max-w-[180px] whitespace-normal text-xs text-muted-foreground">{payment.notes || "—"}</TableCell></TableRow>)}{pagedPayments.length === 0 && <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground">No payments match the current filters.</TableCell></TableRow>}</TableBody></>}</Table></div><div className="flex items-center justify-between border-t border-border px-4 py-3"><p className="text-xs text-muted-foreground">Page {page} of {totalPages} · {activeRows.length} {view === "dues" ? "records" : "payments"} · Collection {summary.collectionPercent}%</p><div className="flex gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</Button><Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}>Next</Button></div></div></div>
     </AppShell>
   );
 }

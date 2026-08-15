@@ -11,6 +11,8 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    // Development-only: permits temporary secure preview hosts used for browser validation.
+    allowedHosts: true,
     proxy: {
       "/api": {
         target: "http://localhost:5000",

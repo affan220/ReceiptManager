@@ -1,4 +1,4 @@
-import { defaultSettings, ImportMemberInput, Member, OrgSettings } from "./store";
+import { defaultSettings, ImportMemberInput, Member, NewMemberInput, OrgSettings, PaymentAllocationInput } from "./store";
 import { generateUsernameSuggestions, normalizeUsername, usernameToEmail } from "./auth";
 import { supabase } from "./supabase";
 
@@ -21,18 +21,67 @@ export interface AuthUser {
   user_metadata: { username: string };
 }
 
+export interface PaymentAllocation {
+  id?: string;
+  monthlyDueId: string;
+  allocatedAmount: number;
+  month: number;
+  year: number;
+  dueAmount: number;
+  memberName: string;
+}
+
 export interface PaymentRecord {
   id: string;
   userId: string;
   memberId: string;
+  memberIdentityId: string;
   voucherNumber: string;
   paymentDate: string;
   amount: number;
   paymentStatus: string;
   paymentMethod: "cash" | "account";
   notes: string;
+  allocations: PaymentAllocation[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MemberLedgerDetail {
+  due: Member;
+  dues: Member[];
+  payments: PaymentRecord[];
+}
+
+export interface LedgerDashboardSummary {
+  total: number;
+  paid: number;
+  unpaid: number;
+  pending: number;
+  partial: number;
+  expectedDues: number;
+  monthlyCollection: number;
+  yearlyCollection: number;
+  outstanding: number;
+  cashReceived: number;
+  accountReceived: number;
+  collectionPercent: number;
+}
+
+export interface AddMemberResult {
+  member: Member | null;
+  createdCount: number;
+  skippedCount: number;
+  payment: PaymentRecord | null;
+}
+
+export interface PaymentReceiptResult {
+  receiptNo: string;
+  paymentId: string;
+  voucherNumber: string;
+  paymentDate: string;
+  amount: number;
+  paymentMethod: "cash" | "account";
 }
 
 export interface BulkImportFailure {
@@ -52,8 +101,12 @@ export interface Receipt {
   id: string;
   userId: string;
   memberId: string;
+  paymentId: string | null;
   receiptSeq: number;
   receiptNo: string;
+  voucherNumber: string | null;
+  paymentDate: string | null;
+  paymentMethod: "cash" | "account" | null;
   month: number;
   year: number;
   amount: number;
@@ -80,10 +133,13 @@ export class SessionEndedError extends Error {
 
 type DbMember = {
   id: string;
-  user_id: string;
+  member_identity_id?: string | null;
   name: string;
   phone: string | null;
   amount: number | string;
+  amount_paid?: number | string | null;
+  amount_pending?: number | string | null;
+  total_pending_amount?: number | string | null;
   status: string;
   payment_mode?: string | null;
   month: number;
@@ -92,6 +148,7 @@ type DbMember = {
   months_pending: number;
   payment_date?: string | null;
   voucher_number?: string | null;
+  legacy_review_required?: boolean | null;
   created_at: string;
   updated_at: string;
 };
@@ -153,64 +210,69 @@ function toAuthUser(user: { id: string; created_at?: string; email?: string | nu
 }
 
 function toMember(row: DbMember): Member {
+  const amount = Number(row.amount ?? 0);
+  const amountPaid = Number(row.amount_paid ?? (row.status === "paid" ? amount : 0));
+  const amountPending = Number(row.amount_pending ?? Math.max(amount - amountPaid, 0));
   return {
     id: row.id,
+    member_identity_id: row.member_identity_id ?? undefined,
     name: row.name,
     phone: row.phone ?? "",
-    amount: Number(row.amount),
-    status: row.status as Member["status"],
+    amount,
+    amount_paid: amountPaid,
+    amount_pending: amountPending,
+    total_pending_amount: Number(row.total_pending_amount ?? amountPending),
+    status: row.status === "partial" ? "partial" : row.status as Member["status"],
     payment_mode: row.payment_mode === "account" ? "account" : "cash",
     month: Number(row.month),
     year: Number(row.year),
     hold: Boolean(row.hold),
-    months_pending: Number(row.months_pending ?? 0),
+    months_pending: Number(row.months_pending ?? (amountPending > 0 ? 1 : 0)),
     payment_date: row.payment_date ?? null,
     voucher_number: row.voucher_number ?? null,
+    legacy_review_required: Boolean(row.legacy_review_required),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-function memberInsert(userId: string, member: Partial<Member>) {
-  const now = new Date();
+function toAllocation(row: Record<string, unknown>): PaymentAllocation {
   return {
-    user_id: userId,
-    name: member.name?.trim() || "",
-    phone: member.phone?.trim() || "",
-    amount: Number(member.amount ?? 0),
-    status: member.status ?? "unpaid",
-    payment_mode: member.payment_mode === "account" ? "account" : "cash",
-    month: Number(member.month ?? now.getMonth() + 1),
-    year: Number(member.year ?? now.getFullYear()),
-    hold: Boolean(member.hold),
-    months_pending: Number(member.months_pending ?? 0),
-    ...(member.payment_date ? { payment_date: member.payment_date } : {}),
-    ...(member.voucher_number?.trim() ? { voucher_number: member.voucher_number.trim() } : {}),
+    id: row.id ? String(row.id) : undefined,
+    monthlyDueId: String(row.monthly_due_id ?? row.monthlyDueId ?? ""),
+    allocatedAmount: Number(row.allocated_amount ?? row.allocatedAmount ?? 0),
+    month: Number(row.month ?? 0),
+    year: Number(row.year ?? 0),
+    dueAmount: Number(row.due_amount ?? row.dueAmount ?? 0),
+    memberName: String(row.member_name ?? row.memberName ?? ""),
   };
 }
 
-function memberPatch(member: Partial<Member>) {
-  const patch: Record<string, unknown> = {};
-  if (member.name !== undefined) patch.name = member.name.trim();
-  if (member.phone !== undefined) patch.phone = member.phone.trim();
-  if (member.amount !== undefined) patch.amount = Number(member.amount);
-  if (member.status !== undefined) patch.status = member.status;
-  if (member.payment_mode !== undefined) patch.payment_mode = member.payment_mode === "account" ? "account" : "cash";
-  if (member.month !== undefined) patch.month = Number(member.month);
-  if (member.year !== undefined) patch.year = Number(member.year);
-  if (member.hold !== undefined) patch.hold = Boolean(member.hold);
-  if (member.months_pending !== undefined) patch.months_pending = Number(member.months_pending);
-  if (member.payment_date !== undefined) patch.payment_date = member.payment_date || null;
-  if (member.voucher_number !== undefined) patch.voucher_number = member.voucher_number?.trim() || null;
-  return patch;
+function toPayment(row: Record<string, unknown>): PaymentRecord {
+  return {
+    id: String(row.id ?? row.payment_id ?? ""),
+    userId: String(row.user_id ?? ""),
+    memberId: String(row.member_id ?? ""),
+    memberIdentityId: String(row.member_identity_id ?? ""),
+    voucherNumber: String(row.voucher_number ?? ""),
+    paymentDate: String(row.payment_date ?? ""),
+    amount: Number(row.amount ?? 0),
+    paymentStatus: String(row.payment_status ?? "paid"),
+    paymentMethod: row.payment_method === "account" ? "account" : "cash",
+    notes: String(row.notes ?? ""),
+    allocations: Array.isArray(row.allocations) ? row.allocations.map((item) => toAllocation(item as Record<string, unknown>)) : [],
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    updatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString()),
+  };
 }
 
 function messageForDatabaseError(error: { code?: string; message?: string } | null | undefined, fallback: string) {
   const message = error?.message?.toLowerCase() ?? "";
   if (error?.code === "23505" && message.includes("voucher")) return "This voucher number already exists.";
+  if (error?.code === "23505" && message.includes("period")) return "This member already has a contribution record for the selected month and year.";
   if (error?.code === "23505" && message.includes("username")) return "This username is already taken. Please choose another username.";
   if (message.includes("session has ended")) return new SessionEndedError().message;
-  return fallback;
+  return error?.message || fallback;
 }
 
 function messageForAuthError(message: string, action: "login" | "register") {
@@ -339,62 +401,110 @@ export async function loadProfile(userId: string): Promise<ProfileRow | null> {
 }
 
 export async function getMembers(userId?: string): Promise<Member[]> {
-  const ownerId = await resolveOwner(userId);
-  const { data, error } = await supabase
-    .from("members")
-    .select("*")
-    .eq("user_id", ownerId)
-    .order("created_at", { ascending: false });
+  await resolveOwner(userId);
+  const { data, error } = await supabase.rpc("get_ledger_members");
   if (error) throw new Error(messageForDatabaseError(error, "Could not load member records."));
-  return ((data ?? []) as DbMember[]).map(toMember);
+  return Array.isArray(data) ? data.map((row) => toMember(row as DbMember)) : [];
+}
+
+export async function getMemberLedgerDetail(id: string, userId?: string): Promise<MemberLedgerDetail | null> {
+  await resolveOwner(userId);
+  const { data, error } = await supabase.rpc("get_monthly_due_detail", { p_due_member_id: id });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load the current member record."));
+  if (!data || typeof data !== "object") return null;
+  const payload = data as { due?: DbMember; dues?: DbMember[]; payments?: Array<Record<string, unknown>> };
+  if (!payload.due) return null;
+  return {
+    due: toMember(payload.due),
+    dues: Array.isArray(payload.dues) ? payload.dues.map(toMember) : [],
+    payments: Array.isArray(payload.payments) ? payload.payments.map(toPayment) : [],
+  };
 }
 
 export async function getMember(id: string, userId?: string): Promise<Member | null> {
-  const ownerId = await resolveOwner(userId);
-  const { data, error } = await supabase
-    .from("members")
-    .select("*")
-    .eq("id", id)
-    .eq("user_id", ownerId)
-    .maybeSingle();
-  if (error) throw new Error(messageForDatabaseError(error, "Could not load the current member record."));
-  return data ? toMember(data as DbMember) : null;
+  const detail = await getMemberLedgerDetail(id, userId);
+  return detail?.due ?? null;
 }
 
-export async function addMember(userId: string, member: Partial<Member>): Promise<Member> {
-  const ownerId = await resolveOwner(userId);
-  const { data, error } = await supabase
-    .from("members")
-    .insert(memberInsert(ownerId, member))
-    .select()
-    .single();
-  if (error || !data) throw new Error(messageForDatabaseError(error, "Could not save the member record."));
-  return toMember(data as DbMember);
+export async function addMember(userId: string, member: NewMemberInput): Promise<AddMemberResult> {
+  await resolveOwner(userId);
+  const { data, error } = await supabase.rpc("create_member_dues", {
+    p_name: member.name.trim(),
+    p_phone: member.phone.trim(),
+    p_amount: Number(member.amount),
+    p_month: Number(member.month),
+    p_year: Number(member.year),
+    p_all_months: Boolean(member.all_months),
+    p_initial_status: member.status,
+    p_payment_amount: Number(member.payment_amount ?? 0),
+    p_payment_date: member.payment_date || null,
+    p_payment_method: member.payment_mode,
+    p_voucher_number: member.voucher_number?.trim() || null,
+    p_hold: Boolean(member.hold),
+    p_notes: member.payment_notes ?? "",
+  });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not save the member record."));
+  const result = (data ?? {}) as Record<string, unknown>;
+  const createdIds = Array.isArray(result.created_due_ids) ? result.created_due_ids.map(String) : [];
+  const firstMember = createdIds.length ? await getMember(createdIds[0], userId) : null;
+  return {
+    member: firstMember,
+    createdCount: Number(result.created_count ?? 0),
+    skippedCount: Number(result.skipped_count ?? 0),
+    payment: result.payment && typeof result.payment === "object" ? toPayment(result.payment as Record<string, unknown>) : null,
+  };
 }
 
 export async function updateMember(id: string, userId: string, patch: Partial<Member>): Promise<Member> {
-  const ownerId = await resolveOwner(userId);
-  const dataPatch = memberPatch(patch);
-  if (!Object.keys(dataPatch).length) {
-    const current = await getMember(id, ownerId);
-    if (!current) throw new Error("Member not found or could not be updated.");
-    return current;
-  }
-  const { data, error } = await supabase
-    .from("members")
-    .update(dataPatch)
-    .eq("id", id)
-    .eq("user_id", ownerId)
-    .select()
-    .maybeSingle();
-  if (error || !data) throw new Error(messageForDatabaseError(error, "Member not found or could not be updated."));
-  return toMember(data as DbMember);
+  const current = await getMember(id, userId);
+  if (!current) throw new Error("Member not found or could not be updated.");
+  const merged = { ...current, ...patch };
+  const { data, error } = await supabase.rpc("update_monthly_due", {
+    p_due_member_id: id,
+    p_name: merged.name.trim(),
+    p_phone: merged.phone.trim(),
+    p_amount: Number(merged.amount),
+    p_hold: Boolean(merged.hold),
+    p_status: merged.status,
+  });
+  if (error) throw new Error(messageForDatabaseError(error, "Member not found or could not be updated."));
+  const detail = data as { due?: DbMember } | null;
+  if (!detail?.due) throw new Error("Member not found or could not be updated.");
+  return toMember(detail.due);
 }
 
 export async function deleteMember(id: string, userId: string): Promise<void> {
-  const ownerId = await resolveOwner(userId);
-  const { error } = await supabase.from("members").delete().eq("id", id).eq("user_id", ownerId);
-  if (error) throw new Error(messageForDatabaseError(error, "Could not delete the member record."));
+  await resolveOwner(userId);
+  const { error } = await supabase.rpc("delete_monthly_due", { p_due_member_id: id });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not delete the selected monthly record."));
+}
+
+export async function recordMemberPayment(
+  memberId: string,
+  userId: string,
+  amount: number,
+  paymentDate: string,
+  paymentMode: "cash" | "account",
+  voucherNumber?: string | null,
+  notes?: string,
+  allocations?: PaymentAllocationInput[] | null,
+): Promise<PaymentRecord> {
+  await resolveOwner(userId);
+  const payload = allocations?.map((allocation) => ({
+    monthly_due_id: allocation.monthly_due_id,
+    allocated_amount: Number(allocation.allocated_amount),
+  })) ?? null;
+  const { data, error } = await supabase.rpc("record_member_payment", {
+    p_due_member_id: memberId,
+    p_amount: Number(amount),
+    p_payment_date: paymentDate,
+    p_payment_method: paymentMode,
+    p_voucher_number: voucherNumber?.trim() || null,
+    p_notes: notes ?? "",
+    p_allocations: payload,
+  });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not record the payment."));
+  return toPayment(data as Record<string, unknown>);
 }
 
 export async function bulkImportMembers(rows: ImportMemberInput[]): Promise<BulkImportResult> {
@@ -413,33 +523,71 @@ export async function bulkImportMembers(rows: ImportMemberInput[]): Promise<Bulk
   };
 }
 
-export async function searchMembers(userId: string, query: string): Promise<Member[]> {
-  const normalized = query.trim().toLowerCase();
-  const members = await getMembers(userId);
-  if (!normalized) return members;
-  return members.filter((member) => `${member.name} ${member.phone} ${member.payment_mode} ${member.voucher_number ?? ""}`.toLowerCase().includes(normalized));
+export async function getPayments(userId?: string): Promise<PaymentRecord[]> {
+  await resolveOwner(userId);
+  const { data, error } = await supabase.rpc("get_ledger_payments");
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load payment history."));
+  return Array.isArray(data) ? data.map((row) => toPayment(row as Record<string, unknown>)) : [];
+}
+
+export async function getMemberPayments(memberId: string, userId?: string): Promise<PaymentRecord[]> {
+  const detail = await getMemberLedgerDetail(memberId, userId);
+  return detail?.payments ?? [];
+}
+
+export async function getLedgerDashboardSummary(month?: number | null, year?: number | null): Promise<LedgerDashboardSummary> {
+  await ensureActiveSession();
+  const { data, error } = await supabase.rpc("get_ledger_dashboard_summary", {
+    p_month: month ?? null,
+    p_year: year ?? null,
+  });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not calculate the dashboard summary."));
+  const result = (data ?? {}) as Record<string, unknown>;
+  return {
+    total: Number(result.total ?? 0),
+    paid: Number(result.paid ?? 0),
+    unpaid: Number(result.unpaid ?? 0),
+    pending: Number(result.pending ?? 0),
+    partial: Number(result.partial ?? 0),
+    expectedDues: Number(result.expected_dues ?? 0),
+    monthlyCollection: Number(result.monthly_collection ?? 0),
+    yearlyCollection: Number(result.yearly_collection ?? 0),
+    outstanding: Number(result.outstanding ?? 0),
+    cashReceived: Number(result.cash_received ?? 0),
+    accountReceived: Number(result.account_received ?? 0),
+    collectionPercent: Number(result.collection_percent ?? 0),
+  };
 }
 
 export async function getDashboardStats(userId?: string) {
-  const members = await getMembers(userId);
-  const total = members.length;
-  const paid = members.filter((item) => item.status === "paid").length;
-  const unpaid = members.filter((item) => item.status === "unpaid").length;
-  const pending = members.filter((item) => item.status === "pending").length;
-  const monthly = members.filter((item) => item.status === "paid").reduce((sum, item) => sum + item.amount, 0);
-  const yearly = members
-    .filter((item) => item.status === "paid" && item.year === new Date().getFullYear())
-    .reduce((sum, item) => sum + item.amount, 0);
-  const outstanding = members
-    .filter((item) => item.status !== "paid")
-    .reduce((sum, item) => sum + item.amount * Math.max(1, item.months_pending || 1), 0);
-  const cashReceived = members
-    .filter((item) => item.status === "paid" && item.payment_mode === "cash")
-    .reduce((sum, item) => sum + item.amount, 0);
-  const accountReceived = members
-    .filter((item) => item.status === "paid" && item.payment_mode === "account")
-    .reduce((sum, item) => sum + item.amount, 0);
-  return { total, paid, unpaid, pending, monthly, yearly, outstanding, cashReceived, accountReceived };
+  await resolveOwner(userId);
+  const summary = await getLedgerDashboardSummary();
+  return {
+    total: summary.total,
+    paid: summary.paid,
+    unpaid: summary.unpaid,
+    pending: summary.pending,
+    monthly: summary.monthlyCollection,
+    yearly: summary.yearlyCollection,
+    outstanding: summary.outstanding,
+    cashReceived: summary.cashReceived,
+    accountReceived: summary.accountReceived,
+  };
+}
+
+export async function createPaymentReceipt(paymentId: string, userId?: string): Promise<PaymentReceiptResult> {
+  await resolveOwner(userId);
+  const { data, error } = await supabase.rpc("create_payment_receipt", { p_payment_id: paymentId });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not create the payment receipt."));
+  const result = (data ?? {}) as Record<string, unknown>;
+  return {
+    receiptNo: String(result.receipt_no ?? ""),
+    paymentId: String(result.payment_id ?? paymentId),
+    voucherNumber: String(result.voucher_number ?? ""),
+    paymentDate: String(result.payment_date ?? ""),
+    amount: Number(result.amount ?? 0),
+    paymentMethod: result.payment_method === "account" ? "account" : "cash",
+  };
 }
 
 export async function loadSettings(userId?: string): Promise<OrgSettings | null> {
@@ -479,33 +627,30 @@ export async function saveSettings(userId: string, settings: Partial<OrgSettings
   if (error) throw new Error(messageForDatabaseError(error, "Could not save organization settings."));
 }
 
-export async function getPayments(userId?: string): Promise<PaymentRecord[]> {
+export async function getReceipts(userId?: string): Promise<Receipt[]> {
   const ownerId = await resolveOwner(userId);
   const { data, error } = await supabase
-    .from("payments")
+    .from("receipts")
     .select("*")
     .eq("user_id", ownerId)
-    .order("payment_date", { ascending: false })
     .order("created_at", { ascending: false });
-  if (error) throw new Error(messageForDatabaseError(error, "Could not load payment history."));
-  return (data ?? []).map((row: Record<string, unknown>) => ({
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load receipt records."));
+  return (data ?? []).map((row: Record<string, unknown>, index) => ({
     id: String(row.id),
     userId: String(row.user_id),
     memberId: String(row.member_id),
-    voucherNumber: String(row.voucher_number),
-    paymentDate: String(row.payment_date),
+    paymentId: row.payment_id ? String(row.payment_id) : null,
+    receiptSeq: index + 1,
+    receiptNo: String(row.receipt_no),
+    voucherNumber: row.voucher_number ? String(row.voucher_number) : null,
+    paymentDate: row.payment_date ? String(row.payment_date) : null,
+    paymentMethod: row.payment_method === "account" ? "account" : row.payment_method === "cash" ? "cash" : null,
+    month: Number(row.month),
+    year: Number(row.year),
     amount: Number(row.amount),
-    paymentStatus: String(row.payment_status),
-    paymentMethod: row.payment_method === "account" ? "account" : "cash",
-    notes: String(row.notes ?? ""),
+    status: String(row.status),
     createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
   }));
-}
-
-export async function getMemberPayments(memberId: string, userId?: string): Promise<PaymentRecord[]> {
-  const payments = await getPayments(userId);
-  return payments.filter((payment) => payment.memberId === memberId);
 }
 
 export async function loadThemePreference(): Promise<ThemePreference> {
@@ -533,47 +678,6 @@ export async function saveThemePreference(preference: ThemePreference): Promise<
 
 export async function suggestAvailableUsernames(username: string, limit = 5): Promise<string[]> {
   return generateUsernameSuggestions(normalizeUsername(username), limit);
-}
-
-export async function saveReceipt(userId: string, memberId: string, month: number, year: number, amount: number, status: string): Promise<string> {
-  const ownerId = await resolveOwner(userId);
-  const [settings, sequenceResult] = await Promise.all([loadSettings(ownerId), supabase.rpc("next_receipt_number")]);
-  if (sequenceResult.error || sequenceResult.data === null) throw new Error("Could not allocate a receipt number.");
-
-  const receiptNo = `${settings?.receiptPrefix ?? defaultSettings.receiptPrefix}-${year}-${String(sequenceResult.data).padStart(5, "0")}`;
-  const { error } = await supabase.from("receipts").insert({
-    user_id: ownerId,
-    member_id: memberId,
-    month,
-    year,
-    amount,
-    status,
-    receipt_no: receiptNo,
-  });
-  if (error) throw new Error(messageForDatabaseError(error, "Could not save the receipt record."));
-  return receiptNo;
-}
-
-export async function getReceipts(userId?: string): Promise<Receipt[]> {
-  const ownerId = await resolveOwner(userId);
-  const { data, error } = await supabase
-    .from("receipts")
-    .select("*")
-    .eq("user_id", ownerId)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(messageForDatabaseError(error, "Could not load receipt records."));
-  return (data ?? []).map((row: Record<string, unknown>, index) => ({
-    id: String(row.id),
-    userId: String(row.user_id),
-    memberId: String(row.member_id),
-    receiptSeq: index + 1,
-    receiptNo: String(row.receipt_no),
-    month: Number(row.month),
-    year: Number(row.year),
-    amount: Number(row.amount),
-    status: String(row.status),
-    createdAt: String(row.created_at),
-  }));
 }
 
 export async function updatePassword(userId: string, password: string): Promise<void> {
@@ -605,8 +709,20 @@ export async function importLegacyLocalStorageData(): Promise<{ importedMembersC
 
   let importedMembersCount = 0;
   for (const member of legacyMembers) {
-    await addMember(currentUser.id, member);
-    importedMembersCount += 1;
+    const result = await addMember(currentUser.id, {
+      name: member.name ?? "",
+      phone: member.phone ?? "",
+      amount: Number(member.amount ?? 0),
+      status: member.status ?? "unpaid",
+      payment_mode: member.payment_mode === "account" ? "account" : "cash",
+      month: Number(member.month ?? new Date().getMonth() + 1),
+      year: Number(member.year ?? new Date().getFullYear()),
+      hold: Boolean(member.hold),
+      payment_date: member.payment_date ?? null,
+      voucher_number: member.voucher_number ?? null,
+      payment_amount: member.status === "paid" ? Number(member.amount ?? 0) : 0,
+    });
+    importedMembersCount += result.createdCount;
   }
   return { importedMembersCount, importedReceiptsCount: 0 };
 }
