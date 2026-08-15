@@ -141,12 +141,12 @@ export default function Dashboard() {
         <StatCard label="Paid" value={stats.paid} icon={CheckCircle2} tone="success" />
         <StatCard label="Unpaid" value={stats.unpaid} icon={XCircle} tone="destructive" />
         <StatCard label="Pending" value={stats.pending} icon={Clock} tone="warning" />
-        <StatCard label="Member Collection" value={`${c}${stats.memberMonthlyCollection.toLocaleString()}`} icon={Wallet} tone="primary" hint="Actual member payments" />
+        <StatCard label="Monthly Collection" value={`${c}${stats.monthlyCollection.toLocaleString()}`} icon={Wallet} tone="primary" hint={`Member ${c}${stats.memberMonthlyCollection.toLocaleString()} + Other ${c}${stats.otherCollection.toLocaleString()}`} />
         <StatCard label="Friday Collection" value={`${c}${stats.fridayCollection.toLocaleString()}`} icon={CalendarDays} tone="success" />
         <StatCard label="Room Rent" value={`${c}${stats.roomRentCollection.toLocaleString()}`} icon={Building2} tone="info" />
         <StatCard label="Other Collection" value={`${c}${stats.otherCollection.toLocaleString()}`} icon={Landmark} tone="accent" hint="Friday + Room Rent" />
-        <StatCard label="Total Collection" value={`${c}${stats.totalCollection.toLocaleString()}`} icon={TrendingUp} tone="success" hint="Member + Other" />
-        <StatCard label="Yearly Total" value={`${c}${stats.yearlyTotalCollection.toLocaleString()}`} icon={TrendingUp} tone="primary" hint={`Member ${c}${stats.memberYearlyCollection.toLocaleString()} + Other ${c}${stats.yearlyOtherCollection.toLocaleString()}`} />
+        <StatCard label="Member Payments" value={`${c}${stats.memberMonthlyCollection.toLocaleString()}`} icon={TrendingUp} tone="success" hint="Actual member payments received" />
+        <StatCard label="Yearly Total" value={`${c}${stats.yearlyCollection.toLocaleString()}`} icon={TrendingUp} tone="primary" hint={`Member ${c}${stats.memberYearlyCollection.toLocaleString()} + Other ${c}${stats.yearlyOtherCollection.toLocaleString()}`} />
         <StatCard label="Outstanding" value={`${c}${stats.outstanding.toLocaleString()}`} icon={AlertTriangle} tone="destructive" />
         <StatCard label="Cash Received" value={`${c}${stats.cashReceived.toLocaleString()}`} icon={Wallet} tone="success" hint={`Other ${c}${stats.otherCashReceived.toLocaleString()}`} />
         <StatCard label="Account Received" value={`${c}${stats.accountReceived.toLocaleString()}`} icon={Building2} tone="info" hint={`Other ${c}${stats.otherAccountReceived.toLocaleString()}`} />
