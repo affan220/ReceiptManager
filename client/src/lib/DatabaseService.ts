@@ -53,6 +53,36 @@ export interface MemberLedgerDetail {
   payments: PaymentRecord[];
 }
 
+export interface FridayCollection {
+  id: string;
+  collectionDate: string;
+  amount: number;
+  paymentMode: "cash" | "account";
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoomRent {
+  id: string;
+  rentDate: string;
+  amount: number;
+  paymentMode: "cash" | "account";
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OtherIncomeSummary {
+  fridayCollections: FridayCollection[];
+  roomRents: RoomRent[];
+  fridayTotal: number;
+  roomRentTotal: number;
+  otherTotal: number;
+  cashTotal: number;
+  accountTotal: number;
+}
+
 export interface LedgerDashboardSummary {
   total: number;
   paid: number;
@@ -66,6 +96,18 @@ export interface LedgerDashboardSummary {
   cashReceived: number;
   accountReceived: number;
   collectionPercent: number;
+  memberMonthlyCollection: number;
+  memberYearlyCollection: number;
+  fridayCollection: number;
+  roomRentCollection: number;
+  otherCollection: number;
+  otherCashReceived: number;
+  otherAccountReceived: number;
+  totalCollection: number;
+  yearlyFridayCollection: number;
+  yearlyRoomRentCollection: number;
+  yearlyOtherCollection: number;
+  yearlyTotalCollection: number;
 }
 
 export interface AddMemberResult {
@@ -246,6 +288,20 @@ function toAllocation(row: Record<string, unknown>): PaymentAllocation {
     dueAmount: Number(row.due_amount ?? row.dueAmount ?? 0),
     memberName: String(row.member_name ?? row.memberName ?? ""),
   };
+}
+
+function toOtherIncomeRow(row: Record<string, unknown>, kind: "friday" | "rent"): FridayCollection | RoomRent {
+  const common = {
+    id: String(row.id ?? ""),
+    amount: Number(row.amount ?? 0),
+    paymentMode: row.payment_mode === "account" ? "account" as const : "cash" as const,
+    notes: String(row.notes ?? ""),
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? row.created_at ?? ""),
+  };
+  return kind === "friday"
+    ? { ...common, collectionDate: String(row.collection_date ?? "") }
+    : { ...common, rentDate: String(row.rent_date ?? "") };
 }
 
 function toPayment(row: Record<string, unknown>): PaymentRecord {
@@ -530,6 +586,63 @@ export async function getPayments(userId?: string): Promise<PaymentRecord[]> {
   return Array.isArray(data) ? data.map((row) => toPayment(row as Record<string, unknown>)) : [];
 }
 
+export async function getOtherIncome(month?: number | null, year?: number | null): Promise<OtherIncomeSummary> {
+  await ensureActiveSession();
+  const { data, error } = await supabase.rpc("get_other_income", { p_month: month ?? null, p_year: year ?? null });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load Other collections."));
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const fridayRows = Array.isArray(payload.friday_collections) ? payload.friday_collections : [];
+  const rentRows = Array.isArray(payload.room_rents) ? payload.room_rents : [];
+  return {
+    fridayCollections: fridayRows.map((row) => toOtherIncomeRow(row as Record<string, unknown>, "friday") as FridayCollection),
+    roomRents: rentRows.map((row) => toOtherIncomeRow(row as Record<string, unknown>, "rent") as RoomRent),
+    fridayTotal: Number(payload.friday_total ?? 0),
+    roomRentTotal: Number(payload.room_rent_total ?? 0),
+    otherTotal: Number(payload.other_total ?? 0),
+    cashTotal: Number(payload.cash_total ?? 0),
+    accountTotal: Number(payload.account_total ?? 0),
+  };
+}
+
+export async function saveFridayCollection(collectionDate: string, amount: number, paymentMode: "cash" | "account", notes = ""): Promise<FridayCollection> {
+  await ensureActiveSession();
+  const { data, error } = await supabase.rpc("upsert_friday_collection", {
+    p_collection_date: collectionDate, p_amount: Number(amount), p_payment_mode: paymentMode, p_notes: notes,
+  });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not save the Friday collection."));
+  return toOtherIncomeRow(data as Record<string, unknown>, "friday") as FridayCollection;
+}
+
+export async function removeFridayCollection(id: string): Promise<void> {
+  await ensureActiveSession();
+  const { error } = await supabase.rpc("delete_friday_collection", { p_collection_id: id });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not delete the Friday collection."));
+}
+
+export async function createRoomRent(rentDate: string, amount: number, paymentMode: "cash" | "account", notes = ""): Promise<RoomRent> {
+  await ensureActiveSession();
+  const { data, error } = await supabase.rpc("create_room_rent", {
+    p_rent_date: rentDate, p_amount: Number(amount), p_payment_mode: paymentMode, p_notes: notes,
+  });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not save the room rent."));
+  return toOtherIncomeRow(data as Record<string, unknown>, "rent") as RoomRent;
+}
+
+export async function updateRoomRent(id: string, rentDate: string, amount: number, paymentMode: "cash" | "account", notes = ""): Promise<RoomRent> {
+  await ensureActiveSession();
+  const { data, error } = await supabase.rpc("update_room_rent", {
+    p_rent_id: id, p_rent_date: rentDate, p_amount: Number(amount), p_payment_mode: paymentMode, p_notes: notes,
+  });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not update the room rent."));
+  return toOtherIncomeRow(data as Record<string, unknown>, "rent") as RoomRent;
+}
+
+export async function removeRoomRent(id: string): Promise<void> {
+  await ensureActiveSession();
+  const { error } = await supabase.rpc("delete_room_rent", { p_rent_id: id });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not delete the room rent."));
+}
+
 export async function getMemberPayments(memberId: string, userId?: string): Promise<PaymentRecord[]> {
   const detail = await getMemberLedgerDetail(memberId, userId);
   return detail?.payments ?? [];
@@ -556,6 +669,18 @@ export async function getLedgerDashboardSummary(month?: number | null, year?: nu
     cashReceived: Number(result.cash_received ?? 0),
     accountReceived: Number(result.account_received ?? 0),
     collectionPercent: Number(result.collection_percent ?? 0),
+    memberMonthlyCollection: Number(result.member_monthly_collection ?? result.monthly_collection ?? 0),
+    memberYearlyCollection: Number(result.member_yearly_collection ?? result.yearly_collection ?? 0),
+    fridayCollection: Number(result.friday_collection ?? 0),
+    roomRentCollection: Number(result.room_rent_collection ?? 0),
+    otherCollection: Number(result.other_collection ?? 0),
+    otherCashReceived: Number(result.other_cash_received ?? 0),
+    otherAccountReceived: Number(result.other_account_received ?? 0),
+    totalCollection: Number(result.total_collection ?? result.monthly_collection ?? 0),
+    yearlyFridayCollection: Number(result.yearly_friday_collection ?? 0),
+    yearlyRoomRentCollection: Number(result.yearly_room_rent_collection ?? 0),
+    yearlyOtherCollection: Number(result.yearly_other_collection ?? 0),
+    yearlyTotalCollection: Number(result.yearly_total_collection ?? result.yearly_collection ?? 0),
   };
 }
 

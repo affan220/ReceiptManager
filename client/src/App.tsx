@@ -12,6 +12,7 @@ import Dashboard from "./pages/Dashboard";
 import Reports from "./pages/Reports";
 import Import from "./pages/Import";
 import PrintCenter from "./pages/PrintCenter";
+import Other from "./pages/Other";
 import SettingsPage from "./pages/Settings";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -48,6 +49,7 @@ const App = () => (
               <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
               <Route path="/import" element={<ProtectedRoute><Import /></ProtectedRoute>} />
               <Route path="/print" element={<ProtectedRoute><PrintCenter /></ProtectedRoute>} />
+              <Route path="/other" element={<ProtectedRoute><Other /></ProtectedRoute>} />
               <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>

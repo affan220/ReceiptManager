@@ -13,6 +13,7 @@ import { useApp } from "@/lib/app-context";
 import { MemberLedgerDetail, PaymentRecord } from "@/lib/DatabaseService";
 import { toast } from "sonner";
 import { Loader2, SlidersHorizontal } from "lucide-react";
+import { formatIndianMobile, indianMobileDigits, isIndianMobile } from "@/lib/phone";
 
 interface Props {
   open: boolean;
@@ -83,7 +84,7 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
 
     setForm({
       name: member.name,
-      phone: member.phone,
+      phone: indianMobileDigits(member.phone),
       amount: member.amount,
       status: member.status,
       payment_mode: member.payment_mode ?? "cash",
@@ -106,7 +107,7 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
       setForm((previous) => ({
         ...previous,
         name: latest.due.name,
-        phone: latest.due.phone,
+        phone: indianMobileDigits(latest.due.phone),
         amount: latest.due.amount,
         status: latest.due.status,
         payment_mode: latest.due.payment_mode ?? "cash",
@@ -161,6 +162,10 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
       toast.error("Name is required");
       return;
     }
+    if (!isIndianMobile(form.phone)) {
+      toast.error("Enter a valid 10-digit Indian mobile number.");
+      return;
+    }
     if (form.amount < 0) {
       toast.error("Monthly amount must be zero or greater.");
       return;
@@ -190,7 +195,7 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
       if (isEdit && member) {
         const updated = await updateMember(member.id, {
           name: form.name,
-          phone: form.phone,
+          phone: formatIndianMobile(form.phone),
           amount: form.amount,
           status: form.status,
           hold: form.hold,
@@ -214,6 +219,7 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
         const initialPayment = paymentRequired ? paymentAmount : 0;
         const result = await addMember({
           ...form,
+          phone: formatIndianMobile(form.phone),
           status: initialPayment > 0 ? form.status : (form.status === "paid" || form.status === "partial" ? "pending" : form.status),
           payment_amount: initialPayment,
           payment_date: initialPayment > 0 ? (form.payment_date || today) : null,
@@ -253,7 +259,18 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-2">
                 <Label>Phone</Label>
-                <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 ..." />
+                <div className="flex overflow-hidden rounded-md border border-input bg-background shadow-sm focus-within:ring-1 focus-within:ring-ring">
+                  <span className="flex items-center border-r border-input bg-muted px-3 text-sm font-medium text-foreground">+91</span>
+                  <Input
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: indianMobileDigits(e.target.value) })}
+                    placeholder="9876543210"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={10}
+                    className="border-0 shadow-none focus-visible:ring-0"
+                  />
+                </div>
               </div>
               <div className="grid gap-2">
                 <Label>Monthly amount</Label>

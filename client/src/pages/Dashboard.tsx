@@ -9,8 +9,9 @@ import { Member, MONTHS } from "@/lib/store";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, CheckCircle2, XCircle, Clock, Wallet, TrendingUp, AlertTriangle, Percent, Plus, Search, Building2 } from "lucide-react";
+import { Users, CheckCircle2, XCircle, Clock, Wallet, TrendingUp, AlertTriangle, Percent, Plus, Search, Building2, CalendarDays, Landmark } from "lucide-react";
 import { LedgerDashboardSummary, hasLegacyLocalStorageData, importLegacyLocalStorageData } from "@/lib/DatabaseService";
+import { phoneMatches } from "@/lib/phone";
 import { toast } from "sonner";
 
 const ALL = "all";
@@ -31,7 +32,9 @@ function saveStoredValue(key: string, value: string) {
 const emptySummary: LedgerDashboardSummary = {
   total: 0, paid: 0, unpaid: 0, pending: 0, partial: 0, expectedDues: 0,
   monthlyCollection: 0, yearlyCollection: 0, outstanding: 0, cashReceived: 0,
-  accountReceived: 0, collectionPercent: 0,
+  accountReceived: 0, collectionPercent: 0, memberMonthlyCollection: 0, memberYearlyCollection: 0,
+  fridayCollection: 0, roomRentCollection: 0, otherCollection: 0, otherCashReceived: 0, otherAccountReceived: 0,
+  totalCollection: 0, yearlyFridayCollection: 0, yearlyRoomRentCollection: 0, yearlyOtherCollection: 0, yearlyTotalCollection: 0,
 };
 
 export default function Dashboard() {
@@ -89,7 +92,7 @@ export default function Dashboard() {
       ? statuses.includes(HOLD as StatusFilterValue) || statuses.includes(comparableStatus as StatusFilterValue)
       : statuses.includes(comparableStatus as StatusFilterValue);
     if (!matchesStatus) return false;
-    if (search && !`${member.name} ${member.phone} ${member.payment_mode ?? "cash"} ${member.voucher_number ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search && !`${member.name} ${member.payment_mode ?? "cash"} ${member.voucher_number ?? ""}`.toLowerCase().includes(search.toLowerCase()) && !phoneMatches(member.phone, search)) return false;
     return true;
   }), [members, month, year, statuses, search]);
 
@@ -138,11 +141,15 @@ export default function Dashboard() {
         <StatCard label="Paid" value={stats.paid} icon={CheckCircle2} tone="success" />
         <StatCard label="Unpaid" value={stats.unpaid} icon={XCircle} tone="destructive" />
         <StatCard label="Pending" value={stats.pending} icon={Clock} tone="warning" />
-        <StatCard label="Monthly Collection" value={`${c}${stats.monthlyCollection.toLocaleString()}`} icon={Wallet} tone="primary" hint="Actual payments received" />
-        <StatCard label="Yearly Collection" value={`${c}${stats.yearlyCollection.toLocaleString()}`} icon={TrendingUp} tone="success" />
+        <StatCard label="Member Collection" value={`${c}${stats.memberMonthlyCollection.toLocaleString()}`} icon={Wallet} tone="primary" hint="Actual member payments" />
+        <StatCard label="Friday Collection" value={`${c}${stats.fridayCollection.toLocaleString()}`} icon={CalendarDays} tone="success" />
+        <StatCard label="Room Rent" value={`${c}${stats.roomRentCollection.toLocaleString()}`} icon={Building2} tone="info" />
+        <StatCard label="Other Collection" value={`${c}${stats.otherCollection.toLocaleString()}`} icon={Landmark} tone="accent" hint="Friday + Room Rent" />
+        <StatCard label="Total Collection" value={`${c}${stats.totalCollection.toLocaleString()}`} icon={TrendingUp} tone="success" hint="Member + Other" />
+        <StatCard label="Yearly Total" value={`${c}${stats.yearlyTotalCollection.toLocaleString()}`} icon={TrendingUp} tone="primary" hint={`Member ${c}${stats.memberYearlyCollection.toLocaleString()} + Other ${c}${stats.yearlyOtherCollection.toLocaleString()}`} />
         <StatCard label="Outstanding" value={`${c}${stats.outstanding.toLocaleString()}`} icon={AlertTriangle} tone="destructive" />
-        <StatCard label="Cash Received" value={`${c}${stats.cashReceived.toLocaleString()}`} icon={Wallet} tone="success" />
-        <StatCard label="Account Received" value={`${c}${stats.accountReceived.toLocaleString()}`} icon={Building2} tone="info" />
+        <StatCard label="Cash Received" value={`${c}${stats.cashReceived.toLocaleString()}`} icon={Wallet} tone="success" hint={`Other ${c}${stats.otherCashReceived.toLocaleString()}`} />
+        <StatCard label="Account Received" value={`${c}${stats.accountReceived.toLocaleString()}`} icon={Building2} tone="info" hint={`Other ${c}${stats.otherAccountReceived.toLocaleString()}`} />
         <StatCard label="Collection %" value={`${stats.collectionPercent.toLocaleString()}%`} icon={Percent} tone="accent" hint={`${c}${stats.expectedDues.toLocaleString()} expected dues`} />
       </div>
 
