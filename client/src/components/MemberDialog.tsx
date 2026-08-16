@@ -19,12 +19,35 @@ interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   member?: Member | null;
+  defaultMonth?: number | null;
+  defaultYear?: number | null;
 }
 
 type FormState = NewMemberInput;
 
 function formatPeriod(month: number, year: number) {
   return `${MONTHS[month - 1] ?? "Month"} ${year}`;
+}
+
+function formatDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function paymentDateForPeriod(month: number, year: number) {
+  const today = new Date();
+  if (today.getMonth() + 1 === month && today.getFullYear() === year) return formatDateInput(today);
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}
+
+function validPeriod(month: number | null | undefined, year: number | null | undefined) {
+  const now = new Date();
+  return {
+    month: month && month >= 1 && month <= 12 ? month : now.getMonth() + 1,
+    year: year && year >= 2000 && year <= 2100 ? year : now.getFullYear(),
+  };
 }
 
 function suggestedAllocations(detail: MemberLedgerDetail | null, amount: number) {
@@ -43,15 +66,17 @@ function suggestedAllocations(detail: MemberLedgerDetail | null, amount: number)
   return allocation;
 }
 
-export function MemberDialog({ open, onOpenChange, member }: Props) {
+export function MemberDialog({ open, onOpenChange, member, defaultMonth, defaultYear }: Props) {
   const { addMember, getMemberDetail, updateMember, recordPayment } = useApp();
   const isEdit = !!member;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = formatDateInput(new Date());
+  const defaultPeriod = validPeriod(defaultMonth, defaultYear);
   const [form, setForm] = useState<FormState>({
     name: "", phone: "", amount: 0, status: "unpaid", payment_mode: "cash",
-    month: new Date().getMonth() + 1, year: new Date().getFullYear(), all_months: false,
-    hold: false, payment_date: null, voucher_number: null, payment_amount: 0, payment_notes: "", allocations: null,
+    month: defaultPeriod.month, year: defaultPeriod.year, all_months: false,
+    hold: false, payment_date: paymentDateForPeriod(defaultPeriod.month, defaultPeriod.year), voucher_number: null, payment_amount: 0, payment_notes: "", allocations: null,
   });
+  const [paymentDateIsAutomatic, setPaymentDateIsAutomatic] = useState(true);
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<MemberLedgerDetail | null>(null);
   const [paymentHistory, setPaymentHistory] = useState<PaymentRecord[]>([]);
@@ -68,16 +93,17 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
     let active = true;
     if (!open) return () => { active = false; };
 
-    const now = new Date();
     if (!member) {
+      const period = validPeriod(defaultMonth, defaultYear);
       setDetail(null);
       setPaymentHistory([]);
       setManualAllocation(false);
       setAllocationAmounts({});
+      setPaymentDateIsAutomatic(true);
       setForm({
         name: "", phone: "", amount: 0, status: "unpaid", payment_mode: "cash",
-        month: now.getMonth() + 1, year: now.getFullYear(), all_months: false,
-        hold: false, payment_date: null, voucher_number: null, payment_amount: 0, payment_notes: "", allocations: null,
+        month: period.month, year: period.year, all_months: false,
+        hold: false, payment_date: paymentDateForPeriod(period.month, period.year), voucher_number: null, payment_amount: 0, payment_notes: "", allocations: null,
       });
       return () => { active = false; };
     }
@@ -117,7 +143,7 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
       }));
     });
     return () => { active = false; };
-  }, [open, member, getMemberDetail]);
+  }, [open, member, getMemberDetail, defaultMonth, defaultYear]);
 
   useEffect(() => {
     if (!manualAllocation) return;
@@ -284,7 +310,16 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
                 <Select
                   value={form.all_months ? "all_months" : String(form.month)}
                   disabled={isEdit}
-                  onValueChange={(value) => setForm({ ...form, all_months: value === "all_months", month: value === "all_months" ? 1 : Number(value) })}
+                  onValueChange={(value) => {
+                    const allMonths = value === "all_months";
+                    const month = allMonths ? 1 : Number(value);
+                    setForm((previous) => ({
+                      ...previous,
+                      all_months: allMonths,
+                      month,
+                      payment_date: !isEdit && !allMonths && paymentDateIsAutomatic ? paymentDateForPeriod(month, previous.year) : previous.payment_date,
+                    }));
+                  }}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -295,7 +330,14 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
               </div>
               <div className="grid gap-2">
                 <Label>Year</Label>
-                <Select value={String(form.year)} disabled={isEdit} onValueChange={(value) => setForm({ ...form, year: Number(value) })}>
+                <Select value={String(form.year)} disabled={isEdit} onValueChange={(value) => {
+                  const year = Number(value);
+                  setForm((previous) => ({
+                    ...previous,
+                    year,
+                    payment_date: !isEdit && !previous.all_months && paymentDateIsAutomatic ? paymentDateForPeriod(previous.month, year) : previous.payment_date,
+                  }));
+                }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>{years.map((year) => <SelectItem key={year} value={String(year)}>{year}</SelectItem>)}</SelectContent>
                 </Select>
@@ -311,7 +353,7 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
                       ...form,
                       status,
                       payment_amount: shouldPrefillPayment ? form.amount : form.payment_amount,
-                      payment_date: (status === "paid" || status === "partial") && !form.payment_date ? today : form.payment_date,
+                      payment_date: (status === "paid" || status === "partial") && !form.payment_date ? paymentDateForPeriod(form.month, form.year) : form.payment_date,
                     });
                   }}
                 >
@@ -347,7 +389,7 @@ export function MemberDialog({ open, onOpenChange, member }: Props) {
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="payment-date">Payment date</Label>
-                  <Input id="payment-date" type="date" value={form.payment_date ?? today} onChange={(e) => setForm({ ...form, payment_date: e.target.value || null })} disabled={paymentAmount <= 0 && !paymentRequired} />
+                  <Input id="payment-date" type="date" value={form.payment_date ?? paymentDateForPeriod(form.month, form.year)} onChange={(e) => { setPaymentDateIsAutomatic(false); setForm({ ...form, payment_date: e.target.value || null }); }} disabled={paymentAmount <= 0 && !paymentRequired} />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="voucher-number">Voucher number</Label>

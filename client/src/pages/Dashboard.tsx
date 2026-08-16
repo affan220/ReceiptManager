@@ -19,6 +19,8 @@ const HOLD = "hold";
 const ALL_STATUSES: StatusFilterValue[] = ["paid", "unpaid", "pending", "hold"];
 const DASHBOARD_MONTH_KEY = "receipt-manager-dashboard-month";
 const DASHBOARD_YEAR_KEY = "receipt-manager-dashboard-year";
+const DASHBOARD_LAST_MONTH_KEY = "receipt-manager-dashboard-last-month";
+const DASHBOARD_LAST_YEAR_KEY = "receipt-manager-dashboard-last-year";
 
 function readStoredValue(key: string, fallback: string) {
   if (typeof window === "undefined") return fallback;
@@ -52,6 +54,8 @@ export default function Dashboard() {
 
   const selectedMonth = month === ALL ? null : Number(month);
   const selectedYear = year === ALL ? null : Number(year);
+  const addMemberMonth = selectedMonth ?? Number(readStoredValue(DASHBOARD_LAST_MONTH_KEY, String(now.getMonth() + 1)));
+  const addMemberYear = selectedYear ?? Number(readStoredValue(DASHBOARD_LAST_YEAR_KEY, String(now.getFullYear())));
 
   useEffect(() => {
     let active = true;
@@ -109,11 +113,13 @@ export default function Dashboard() {
   const handleMonthChange = (value: string) => {
     setMonth(value);
     saveStoredValue(DASHBOARD_MONTH_KEY, value);
+    if (value !== ALL) saveStoredValue(DASHBOARD_LAST_MONTH_KEY, value);
   };
 
   const handleYearChange = (value: string) => {
     setYear(value);
     saveStoredValue(DASHBOARD_YEAR_KEY, value);
+    if (value !== ALL) saveStoredValue(DASHBOARD_LAST_YEAR_KEY, value);
   };
 
   return (
@@ -156,7 +162,7 @@ export default function Dashboard() {
       <div className="mb-3 flex items-center justify-between"><h2 className="font-display text-lg font-semibold">Members ({filtered.length})</h2></div>
       {filtered.length === 0 ? <div className="card-surface p-12 text-center"><p className="text-muted-foreground">No members match the current filters.</p></div> : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{filtered.map((item) => <MemberCard key={item.id} member={item} onEdit={(selected) => { setEditing(selected); setOpen(true); }} />)}</div>}
 
-      <MemberDialog open={open} onOpenChange={setOpen} member={editing} />
+      <MemberDialog open={open} onOpenChange={setOpen} member={editing} defaultMonth={addMemberMonth} defaultYear={addMemberYear} />
     </AppShell>
   );
 }
