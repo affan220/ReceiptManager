@@ -36,6 +36,7 @@ const emptySummary: LedgerDashboardSummary = {
   monthlyCollection: 0, yearlyCollection: 0, outstanding: 0, cashReceived: 0,
   accountReceived: 0, collectionPercent: 0, memberMonthlyCollection: 0, memberYearlyCollection: 0,
   fridayCollection: 0, roomRentCollection: 0, otherCollection: 0, otherCashReceived: 0, otherAccountReceived: 0,
+  cashIncomeBeforeDeposits: 0, accountIncomeBeforeDeposits: 0, depositedTotal: 0,
   totalCollection: 0, yearlyFridayCollection: 0, yearlyRoomRentCollection: 0, yearlyOtherCollection: 0, yearlyTotalCollection: 0,
 };
 
@@ -154,8 +155,8 @@ export default function Dashboard() {
         <StatCard label="Member Payments" value={`${c}${stats.memberMonthlyCollection.toLocaleString()}`} icon={TrendingUp} tone="success" hint="Actual member payments received" />
         <StatCard label="Yearly Total" value={`${c}${stats.yearlyCollection.toLocaleString()}`} icon={TrendingUp} tone="primary" hint={`Member ${c}${stats.memberYearlyCollection.toLocaleString()} + Other ${c}${stats.yearlyOtherCollection.toLocaleString()}`} />
         <StatCard label="Outstanding" value={`${c}${stats.outstanding.toLocaleString()}`} icon={AlertTriangle} tone="destructive" />
-        <StatCard label="Cash Received" value={`${c}${stats.cashReceived.toLocaleString()}`} icon={Wallet} tone="success" hint={`Other ${c}${stats.otherCashReceived.toLocaleString()}`} />
-        <StatCard label="Account Received" value={`${c}${stats.accountReceived.toLocaleString()}`} icon={Building2} tone="info" hint={`Other ${c}${stats.otherAccountReceived.toLocaleString()}`} />
+        <StatCard label="Cash Received" value={`${c}${stats.cashReceived.toLocaleString()}`} icon={Wallet} tone="success" hint={stats.depositedTotal > 0 ? `${c}${stats.cashIncomeBeforeDeposits.toLocaleString()} cash income − ${c}${stats.depositedTotal.toLocaleString()} deposited` : `Other ${c}${stats.otherCashReceived.toLocaleString()}`} />
+        <StatCard label="Account Received" value={`${c}${stats.accountReceived.toLocaleString()}`} icon={Building2} tone="info" hint={stats.depositedTotal > 0 ? `${c}${stats.accountIncomeBeforeDeposits.toLocaleString()} income + ${c}${stats.depositedTotal.toLocaleString()} deposited` : `Other ${c}${stats.otherAccountReceived.toLocaleString()}`} />
         <StatCard label="Collection %" value={`${stats.collectionPercent.toLocaleString()}%`} icon={Percent} tone="accent" hint={`${c}${stats.expectedDues.toLocaleString()} expected dues`} />
       </div>
 

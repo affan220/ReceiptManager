@@ -83,6 +83,24 @@ export interface OtherIncomeSummary {
   accountTotal: number;
 }
 
+export interface Deposit {
+  id: string;
+  month: number;
+  year: number;
+  depositDate: string;
+  amount: number;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DepositSummary {
+  deposits: Deposit[];
+  cashIncome: number;
+  totalDeposited: number;
+  availableCash: number;
+}
+
 export interface LedgerDashboardSummary {
   total: number;
   paid: number;
@@ -103,6 +121,9 @@ export interface LedgerDashboardSummary {
   otherCollection: number;
   otherCashReceived: number;
   otherAccountReceived: number;
+  cashIncomeBeforeDeposits: number;
+  accountIncomeBeforeDeposits: number;
+  depositedTotal: number;
   totalCollection: number;
   yearlyFridayCollection: number;
   yearlyRoomRentCollection: number;
@@ -302,6 +323,19 @@ function toOtherIncomeRow(row: Record<string, unknown>, kind: "friday" | "rent")
   return kind === "friday"
     ? { ...common, collectionDate: String(row.collection_date ?? "") }
     : { ...common, rentDate: String(row.rent_date ?? "") };
+}
+
+function toDeposit(row: Record<string, unknown>): Deposit {
+  return {
+    id: String(row.id ?? ""),
+    month: Number(row.month ?? 0),
+    year: Number(row.year ?? 0),
+    depositDate: String(row.deposit_date ?? row.depositDate ?? ""),
+    amount: Number(row.amount ?? 0),
+    notes: String(row.notes ?? ""),
+    createdAt: String(row.created_at ?? row.createdAt ?? ""),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? row.created_at ?? ""),
+  };
 }
 
 function toPayment(row: Record<string, unknown>): PaymentRecord {
@@ -643,6 +677,39 @@ export async function removeRoomRent(id: string): Promise<void> {
   if (error) throw new Error(messageForDatabaseError(error, "Could not delete the room rent."));
 }
 
+export async function getDepositSummary(month: number, year: number): Promise<DepositSummary> {
+  await ensureActiveSession();
+  const { data, error } = await supabase.rpc("get_deposit_summary", { p_month: month, p_year: year });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not load deposits."));
+  const result = (data ?? {}) as Record<string, unknown>;
+  return {
+    deposits: Array.isArray(result.deposits) ? result.deposits.map((row) => toDeposit(row as Record<string, unknown>)) : [],
+    cashIncome: Number(result.cash_income ?? 0),
+    totalDeposited: Number(result.total_deposited ?? 0),
+    availableCash: Number(result.available_cash ?? 0),
+  };
+}
+
+export async function createDeposit(month: number, year: number, depositDate: string, amount: number, notes = ""): Promise<Deposit> {
+  await ensureActiveSession();
+  const { data, error } = await supabase.rpc("create_deposit", { p_month: month, p_year: year, p_deposit_date: depositDate, p_amount: Number(amount), p_notes: notes });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not add the deposit."));
+  return toDeposit(data as Record<string, unknown>);
+}
+
+export async function updateDeposit(id: string, month: number, year: number, depositDate: string, amount: number, notes = ""): Promise<Deposit> {
+  await ensureActiveSession();
+  const { data, error } = await supabase.rpc("update_deposit", { p_deposit_id: id, p_month: month, p_year: year, p_deposit_date: depositDate, p_amount: Number(amount), p_notes: notes });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not update the deposit."));
+  return toDeposit(data as Record<string, unknown>);
+}
+
+export async function removeDeposit(id: string): Promise<void> {
+  await ensureActiveSession();
+  const { error } = await supabase.rpc("delete_deposit", { p_deposit_id: id });
+  if (error) throw new Error(messageForDatabaseError(error, "Could not delete the deposit."));
+}
+
 export async function getMemberPayments(memberId: string, userId?: string): Promise<PaymentRecord[]> {
   const detail = await getMemberLedgerDetail(memberId, userId);
   return detail?.payments ?? [];
@@ -676,6 +743,9 @@ export async function getLedgerDashboardSummary(month?: number | null, year?: nu
     otherCollection: Number(result.other_collection ?? 0),
     otherCashReceived: Number(result.other_cash_received ?? 0),
     otherAccountReceived: Number(result.other_account_received ?? 0),
+    cashIncomeBeforeDeposits: Number(result.cash_income_before_deposits ?? result.cash_received ?? 0),
+    accountIncomeBeforeDeposits: Number(result.account_income_before_deposits ?? result.account_received ?? 0),
+    depositedTotal: Number(result.deposited_total ?? 0),
     totalCollection: Number(result.total_collection ?? result.monthly_collection ?? 0),
     yearlyFridayCollection: Number(result.yearly_friday_collection ?? 0),
     yearlyRoomRentCollection: Number(result.yearly_room_rent_collection ?? 0),

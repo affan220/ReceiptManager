@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, FileBarChart, Settings, Upload, Printer, Moon, LogOut, X, Landmark } from "lucide-react";
+import { LayoutDashboard, FileBarChart, Settings, Upload, Printer, Moon, LogOut, X, Landmark, ArrowLeftRight } from "lucide-react";
 import { APP_VERSION, initialsOf } from "@/lib/store";
 import { useApp } from "@/lib/app-context";
 import { useAuth } from "@/lib/auth-context";
@@ -12,6 +12,7 @@ const nav = [
   { to: "/import", label: "Import CSV/TXT", icon: Upload },
   { to: "/print", label: "Print Center", icon: Printer },
   { to: "/other", label: "Other", icon: Landmark },
+  { to: "/deposit", label: "Deposit", icon: ArrowLeftRight },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
