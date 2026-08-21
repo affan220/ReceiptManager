@@ -14,6 +14,7 @@ import { MemberLedgerDetail, PaymentRecord } from "@/lib/DatabaseService";
 import { toast } from "sonner";
 import { Loader2, SlidersHorizontal } from "lucide-react";
 import { formatIndianMobile, indianMobileDigits, isIndianMobile } from "@/lib/phone";
+import { isCalendarDate } from "@/lib/calendar-date";
 
 interface Props {
   open: boolean;
@@ -69,7 +70,6 @@ function suggestedAllocations(detail: MemberLedgerDetail | null, amount: number)
 export function MemberDialog({ open, onOpenChange, member, defaultMonth, defaultYear }: Props) {
   const { addMember, getMemberDetail, updateMember, recordPayment } = useApp();
   const isEdit = !!member;
-  const today = formatDateInput(new Date());
   const defaultPeriod = validPeriod(defaultMonth, defaultYear);
   const [form, setForm] = useState<FormState>({
     name: "", phone: "", amount: 0, status: "unpaid", payment_mode: "cash",
@@ -204,6 +204,10 @@ export function MemberDialog({ open, onOpenChange, member, defaultMonth, default
       toast.error("To mark this due paid, record the actual payment amount below.");
       return;
     }
+    if (paymentAmount > 0 && !isCalendarDate(form.payment_date)) {
+      toast.error("Select a valid payment date before saving the payment.");
+      return;
+    }
     if (manualAllocation && paymentAmount > 0) {
       if (Math.abs(allocatedAmount - paymentAmount) > 0.001) {
         toast.error("Manual allocations must equal the payment amount.");
@@ -230,7 +234,7 @@ export function MemberDialog({ open, onOpenChange, member, defaultMonth, default
           const payment = await recordPayment(
             updated.id,
             paymentAmount,
-            form.payment_date || today,
+            form.payment_date,
             form.payment_mode,
             form.voucher_number,
             form.payment_notes,
@@ -248,7 +252,7 @@ export function MemberDialog({ open, onOpenChange, member, defaultMonth, default
           phone: formatIndianMobile(form.phone),
           status: initialPayment > 0 ? form.status : (form.status === "paid" || form.status === "partial" ? "pending" : form.status),
           payment_amount: initialPayment,
-          payment_date: initialPayment > 0 ? (form.payment_date || today) : null,
+          payment_date: initialPayment > 0 ? form.payment_date : null,
         });
         if (result?.payment) toast.success(`Payment ${result.payment.voucherNumber} recorded`);
         if (result) onOpenChange(false);

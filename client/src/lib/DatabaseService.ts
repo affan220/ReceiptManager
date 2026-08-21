@@ -1,6 +1,7 @@
 import { defaultSettings, ImportMemberInput, Member, NewMemberInput, OrgSettings, PaymentAllocationInput } from "./store";
 import { generateUsernameSuggestions, normalizeUsername, usernameToEmail } from "./auth";
 import { supabase } from "./supabase";
+import { isCalendarDate } from "./calendar-date";
 
 export type ProfileRow = {
   id: string;
@@ -568,6 +569,7 @@ export async function getMember(id: string, userId?: string): Promise<Member | n
 
 export async function addMember(userId: string, member: NewMemberInput): Promise<AddMemberResult> {
   await resolveOwner(userId);
+  if (Number(member.payment_amount ?? 0) > 0 && !isCalendarDate(member.payment_date)) throw new Error("A valid payment date is required.");
   const { data, error } = await supabase.rpc("create_member_dues", {
     p_name: member.name.trim(),
     p_phone: member.phone.trim(),
@@ -631,6 +633,7 @@ export async function recordMemberPayment(
   allocations?: PaymentAllocationInput[] | null,
 ): Promise<PaymentRecord> {
   await resolveOwner(userId);
+  if (!isCalendarDate(paymentDate)) throw new Error("A valid payment date is required.");
   const payload = allocations?.map((allocation) => ({
     monthly_due_id: allocation.monthly_due_id,
     allocated_amount: Number(allocation.allocated_amount),

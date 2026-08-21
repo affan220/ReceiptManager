@@ -6,6 +6,7 @@ import { useApp } from "@/lib/app-context";
 import { MONTHS } from "@/lib/store";
 import { DepositSummary, getDepositSummary, getLedgerDashboardSummary, getOtherIncome, getPayments, LedgerDashboardSummary, OtherIncomeSummary, PaymentRecord } from "@/lib/DatabaseService";
 import { phoneMatches } from "@/lib/phone";
+import { calendarDateMatchesPeriod, calendarDateMatchesRange, formatCalendarDate } from "@/lib/calendar-date";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -26,21 +27,11 @@ const emptyDeposit: DepositSummary = { deposits: [], cashIncome: 0, totalDeposit
 const emptyAccounting: LedgerDashboardSummary = { total: 0, paid: 0, unpaid: 0, pending: 0, partial: 0, expectedDues: 0, monthlyCollection: 0, yearlyCollection: 0, outstanding: 0, cashReceived: 0, accountReceived: 0, collectionPercent: 0, memberMonthlyCollection: 0, memberYearlyCollection: 0, fridayCollection: 0, roomRentCollection: 0, otherCollection: 0, otherCashReceived: 0, otherAccountReceived: 0, cashIncomeBeforeDeposits: 0, accountIncomeBeforeDeposits: 0, depositedTotal: 0, totalCollection: 0, yearlyFridayCollection: 0, yearlyRoomRentCollection: 0, yearlyOtherCollection: 0, yearlyTotalCollection: 0 };
 
 function matchesPaymentDate(value: string | null, range: PaymentDateRange, from: string, to: string) {
-  if (range === "all") return true;
-  if (!value) return false;
-  const paymentDate = new Date(`${value}T00:00:00`);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (range === "today") return paymentDate.getTime() === today.getTime();
-  if (range === "week") { const weekStart = new Date(today); weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7)); return paymentDate >= weekStart && paymentDate <= today; }
-  if (range === "month") return paymentDate.getMonth() === today.getMonth() && paymentDate.getFullYear() === today.getFullYear();
-  if (from && paymentDate < new Date(`${from}T00:00:00`)) return false;
-  if (to && paymentDate > new Date(`${to}T00:00:00`)) return false;
-  return Boolean(from || to);
+  return calendarDateMatchesRange(value, range, from, to);
 }
 
 function formatPdfAmount(amount: number) { return `RS ${amount.toLocaleString()}`; }
-function formatDate(value: string) { return new Date(`${value}T00:00:00`).toLocaleDateString(); }
+function formatDate(value: string) { return formatCalendarDate(value); }
 function allocationsLabel(payment: PaymentRecord) { return payment.allocations.length ? payment.allocations.map((allocation) => `${MONTHS[allocation.month - 1]} ${allocation.year} (${allocation.allocatedAmount.toLocaleString()})`).join(", ") : "—"; }
 function csvSection(title: string, headers: string[], rows: Array<Array<string | number>>) { return [[title], headers, ...rows].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n"); }
 
@@ -83,8 +74,7 @@ export default function Reports() {
   const filteredPayments = useMemo(() => payments.filter((payment) => {
     if (paymentMode !== "all" && payment.paymentMethod !== paymentMode) return false;
     if (!matchesPaymentDate(payment.paymentDate, paymentDateRange, dateFrom, dateTo)) return false;
-    if (selectedYear && new Date(`${payment.paymentDate}T00:00:00`).getFullYear() !== selectedYear) return false;
-    if (selectedMonth && !payment.allocations.some((allocation) => allocation.month === selectedMonth)) return false;
+    if (!calendarDateMatchesPeriod(payment.paymentDate, selectedMonth, selectedYear)) return false;
     const member = memberById.get(payment.memberId);
     return !search || `${member?.name ?? ""} ${payment.voucherNumber} ${payment.paymentMethod} ${payment.paymentDate}`.toLowerCase().includes(search.toLowerCase()) || phoneMatches(member?.phone, search);
   }), [payments, memberById, paymentMode, paymentDateRange, dateFrom, dateTo, search, selectedMonth, selectedYear]);

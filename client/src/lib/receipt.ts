@@ -2,6 +2,7 @@ import jsPDF from "jspdf";
 import QRCode from "qrcode";
 import { Member, OrgSettings, MONTHS } from "./store";
 import { PaymentRecord, createPaymentReceipt, getCurrentUser } from "./DatabaseService";
+import { formatCalendarDate } from "./calendar-date";
 
 function formatPdfAmount(amount: number) {
   return `RS ${amount.toLocaleString()}`;
@@ -12,6 +13,18 @@ function coveredPeriods(payment: PaymentRecord) {
   return payment.allocations
     .map((allocation) => `${MONTHS[allocation.month - 1]} ${allocation.year}`)
     .join(", ");
+}
+
+async function paymentQrDataUrl() {
+  const response = await fetch("/payment-qr.png");
+  if (!response.ok) throw new Error("Payment QR image is unavailable.");
+  const blob = await response.blob();
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not load payment QR image."));
+    reader.onerror = () => reject(new Error("Could not read payment QR image."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 export async function generateReceiptPDF(member: Member, payment: PaymentRecord, settings: OrgSettings) {
@@ -61,7 +74,7 @@ export async function generateReceiptPDF(member: Member, payment: PaymentRecord,
   doc.text("Payment Mode:", 40, 164);
   doc.setFont("helvetica", "normal");
   doc.text(receipt.receiptNo, 125, 132);
-  doc.text(new Date(`${payment.paymentDate}T00:00:00`).toLocaleDateString(), 125, 148);
+  doc.text(formatCalendarDate(payment.paymentDate), 125, 148);
   doc.text(payment.paymentMethod === "account" ? "Account" : "Cash", 125, 164);
 
   doc.setFont("helvetica", "bold");
@@ -102,8 +115,26 @@ export async function generateReceiptPDF(member: Member, payment: PaymentRecord,
     const qrData = JSON.stringify({ r: receipt.receiptNo, v: payment.voucherNumber, n: member.name, a: payment.amount, d: payment.paymentDate });
     const qrUrl = await QRCode.toDataURL(qrData, { width: 200, margin: 0 });
     doc.addImage(qrUrl, "PNG", 50, 256, 70, 70);
-  } catch { /* Keep the receipt usable if QR generation fails. */ }
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text("Receipt verification", 85, 340, { align: "center" });
+  } catch { /* Keep the receipt usable if verification QR generation fails. */ }
 
+  try {
+    const originalPaymentQr = await paymentQrDataUrl();
+    doc.addImage(originalPaymentQr, "PNG", 150, 256, 70, 70);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(20, 120, 90);
+    doc.text("Scan to Pay", 185, 340, { align: "center" });
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(80, 80, 80);
+    doc.text("Original UPI payment QR", 185, 350, { align: "center" });
+  } catch { /* Keep the receipt usable if the payment QR asset cannot be loaded. */ }
+
+  doc.setTextColor(30, 30, 30);
   doc.setDrawColor(120);
   doc.setLineWidth(0.5);
   doc.line(pageW - 200, 310, pageW - 50, 310);
