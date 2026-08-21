@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { useApp } from "@/lib/app-context";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ function formatPdfAmount(amount: number) { return `RS ${amount.toLocaleString()}
 type PrintStatusFilter = "all" | "paid" | "unpaid" | "pending" | "partial" | "hold";
 
 export default function PrintCenter() {
-  const { members, settings } = useApp();
+  const { members, settings, loadMembers } = useApp();
   const now = new Date();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<PrintStatusFilter>("all");
@@ -26,6 +26,7 @@ export default function PrintCenter() {
   const [month, setMonth] = useState(String(now.getMonth() + 1));
   const [year, setYear] = useState(String(now.getFullYear()));
   const [printingPeriod, setPrintingPeriod] = useState(false);
+  useEffect(() => { void loadMembers(); }, [loadMembers]);
   const years = useMemo(() => Array.from(new Set([...members.map((member) => member.year), now.getFullYear()])).sort((a, b) => b - a), [members, now]);
 
   const filtered = useMemo(() => members.filter((member) => {

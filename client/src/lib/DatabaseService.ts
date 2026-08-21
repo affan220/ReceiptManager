@@ -194,6 +194,44 @@ export class SessionEndedError extends Error {
   }
 }
 
+const ACTIVE_SESSION_CACHE_MS = 15_000;
+let validatedSession: { user: AuthUser; expiresAt: number } | null = null;
+let validationInFlight: Promise<AuthUser | null> | null = null;
+
+function clearValidatedSession() {
+  validatedSession = null;
+  validationInFlight = null;
+}
+
+async function validateActiveSession(force = false): Promise<AuthUser | null> {
+  if (!force && validatedSession && validatedSession.expiresAt > Date.now()) return validatedSession.user;
+  if (validationInFlight) return validationInFlight;
+
+  validationInFlight = (async () => {
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) {
+      clearValidatedSession();
+      return null;
+    }
+
+    const { data, error } = await supabase.rpc("heartbeat_active_session");
+    if (error || data !== true) {
+      clearValidatedSession();
+      throw new SessionEndedError();
+    }
+
+    const user = toAuthUser(authData.user);
+    validatedSession = { user, expiresAt: Date.now() + ACTIVE_SESSION_CACHE_MS };
+    return user;
+  })();
+
+  try {
+    return await validationInFlight;
+  } finally {
+    validationInFlight = null;
+  }
+}
+
 type DbMember = {
   id: string;
   member_identity_id?: string | null;
@@ -388,25 +426,27 @@ async function claimCurrentSession(takeOver: boolean) {
   return result;
 }
 
-export async function ensureActiveSession(): Promise<void> {
-  const { data: authData } = await supabase.auth.getUser();
-  if (!authData.user) {
+export async function ensureActiveSession(force = false): Promise<void> {
+  try {
+    const user = await validateActiveSession(force);
+    if (!user) {
+      dispatchSessionEnded();
+      throw new SessionEndedError();
+    }
+  } catch (error) {
     dispatchSessionEnded();
-    throw new SessionEndedError();
-  }
-  const { data, error } = await supabase.rpc("heartbeat_active_session");
-  if (error || data !== true) {
-    dispatchSessionEnded();
-    throw new SessionEndedError();
+    throw error;
   }
 }
 
 async function resolveOwner(userId?: string) {
-  await ensureActiveSession();
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data.user) throw new SessionEndedError();
-  if (userId && data.user.id !== userId) throw new Error("You do not have access to this account's data.");
-  return data.user.id;
+  const activeUser = await validateActiveSession();
+  if (!activeUser) {
+    dispatchSessionEnded();
+    throw new SessionEndedError();
+  }
+  if (userId && activeUser.id !== userId) throw new Error("You do not have access to this account's data.");
+  return activeUser.id;
 }
 
 export async function initializeDatabase(): Promise<void> {
@@ -414,6 +454,7 @@ export async function initializeDatabase(): Promise<void> {
 }
 
 export async function createUser(username: string, password: string): Promise<AuthUser> {
+  clearValidatedSession();
   const normalizedUsername = normalizeUsername(username);
   if (!normalizedUsername || !password) throw new Error("Username and password are required.");
 
@@ -438,11 +479,13 @@ export async function createUser(username: string, password: string): Promise<Au
 
   await claimCurrentSession(false);
   const user = toAuthUser(authenticatedUser);
+  validatedSession = { user, expiresAt: Date.now() + ACTIVE_SESSION_CACHE_MS };
   dispatchAuthStateChange();
   return user;
 }
 
 export async function login(username: string, password: string, takeOver = false): Promise<AuthUser> {
+  clearValidatedSession();
   const normalizedUsername = normalizeUsername(username);
   if (!normalizedUsername || !password) throw new Error("Username and password are required.");
 
@@ -460,6 +503,7 @@ export async function login(username: string, password: string, takeOver = false
   }
 
   const user = toAuthUser(data.user);
+  validatedSession = { user, expiresAt: Date.now() + ACTIVE_SESSION_CACHE_MS };
   dispatchAuthStateChange();
   return user;
 }
@@ -470,13 +514,16 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 }
 
 export async function getValidatedCurrentUser(): Promise<AuthUser | null> {
-  const current = await getCurrentUser();
-  if (!current) return null;
-  await ensureActiveSession();
-  return current;
+  try {
+    return await validateActiveSession();
+  } catch (error) {
+    dispatchSessionEnded();
+    throw error;
+  }
 }
 
 export async function logout(): Promise<void> {
+  clearValidatedSession();
   await supabase.rpc("release_active_session");
   const { error } = await supabase.auth.signOut({ scope: "local" });
   if (error) throw new Error("Could not sign out. Please try again.");
@@ -490,9 +537,12 @@ export async function loadProfile(userId: string): Promise<ProfileRow | null> {
   return data as ProfileRow;
 }
 
-export async function getMembers(userId?: string): Promise<Member[]> {
+export async function getMembers(userId?: string, month?: number | null, year?: number | null): Promise<Member[]> {
   await resolveOwner(userId);
-  const { data, error } = await supabase.rpc("get_ledger_members");
+  const { data, error } = await supabase.rpc("get_ledger_members", {
+    p_month: month ?? null,
+    p_year: year ?? null,
+  });
   if (error) throw new Error(messageForDatabaseError(error, "Could not load member records."));
   return Array.isArray(data) ? data.map((row) => toMember(row as DbMember)) : [];
 }
@@ -535,8 +585,9 @@ export async function addMember(userId: string, member: NewMemberInput): Promise
   });
   if (error) throw new Error(messageForDatabaseError(error, "Could not save the member record."));
   const result = (data ?? {}) as Record<string, unknown>;
-  const createdIds = Array.isArray(result.created_due_ids) ? result.created_due_ids.map(String) : [];
-  const firstMember = createdIds.length ? await getMember(createdIds[0], userId) : null;
+  const firstMember = result.created_due && typeof result.created_due === "object"
+    ? toMember(result.created_due as DbMember)
+    : null;
   return {
     member: firstMember,
     createdCount: Number(result.created_count ?? 0),

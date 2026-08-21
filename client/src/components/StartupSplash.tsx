@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 
-const MIN_SPLASH_MS = 1500;
-const EXIT_MS = 650;
+const MIN_SPLASH_MS = 400;
+const EXIT_MS = 180;
 
 export function StartupSplash() {
   const { loading } = useAuth();

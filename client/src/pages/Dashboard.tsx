@@ -41,7 +41,7 @@ const emptySummary: LedgerDashboardSummary = {
 };
 
 export default function Dashboard() {
-  const { members, settings, refresh, getDashboardSummary } = useApp();
+  const { members, settings, refresh, loadMembers, membersLoading, getDashboardSummary } = useApp();
   const now = new Date();
   const [month, setMonth] = useState<string>(() => readStoredValue(DASHBOARD_MONTH_KEY, String(now.getMonth() + 1)));
   const [year, setYear] = useState<string>(() => readStoredValue(DASHBOARD_YEAR_KEY, String(now.getFullYear())));
@@ -57,6 +57,10 @@ export default function Dashboard() {
   const selectedYear = year === ALL ? null : Number(year);
   const addMemberMonth = selectedMonth ?? Number(readStoredValue(DASHBOARD_LAST_MONTH_KEY, String(now.getMonth() + 1)));
   const addMemberYear = selectedYear ?? Number(readStoredValue(DASHBOARD_LAST_YEAR_KEY, String(now.getFullYear())));
+
+  useEffect(() => {
+    void loadMembers(selectedMonth, selectedYear);
+  }, [loadMembers, selectedMonth, selectedYear]);
 
   useEffect(() => {
     let active = true;
@@ -161,7 +165,7 @@ export default function Dashboard() {
       </div>
 
       <div className="mb-3 flex items-center justify-between"><h2 className="font-display text-lg font-semibold">Members ({filtered.length})</h2></div>
-      {filtered.length === 0 ? <div className="card-surface p-12 text-center"><p className="text-muted-foreground">No members match the current filters.</p></div> : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{filtered.map((item) => <MemberCard key={item.id} member={item} onEdit={(selected) => { setEditing(selected); setOpen(true); }} />)}</div>}
+      {membersLoading ? <div className="card-surface p-12 text-center"><p className="text-muted-foreground">Loading members for {selectedMonthLabel} {selectedYearLabel}...</p></div> : filtered.length === 0 ? <div className="card-surface p-12 text-center"><p className="text-muted-foreground">No members match the current filters.</p></div> : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{filtered.map((item) => <MemberCard key={item.id} member={item} onEdit={(selected) => { setEditing(selected); setOpen(true); }} />)}</div>}
 
       <MemberDialog open={open} onOpenChange={setOpen} member={editing} defaultMonth={addMemberMonth} defaultYear={addMemberYear} />
     </AppShell>

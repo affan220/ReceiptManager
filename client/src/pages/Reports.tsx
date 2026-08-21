@@ -45,7 +45,7 @@ function allocationsLabel(payment: PaymentRecord) { return payment.allocations.l
 function csvSection(title: string, headers: string[], rows: Array<Array<string | number>>) { return [[title], headers, ...rows].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n"); }
 
 export default function Reports() {
-  const { members, settings } = useApp();
+  const { members, settings, loadMembers } = useApp();
   const now = new Date();
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [otherIncome, setOtherIncome] = useState<OtherIncomeSummary>(emptyOther);
@@ -63,6 +63,7 @@ export default function Reports() {
   const [page, setPage] = useState(1);
   const selectedMonth = month === "all" ? null : Number(month);
   const selectedYear = year === "all" ? null : Number(year);
+  useEffect(() => { void loadMembers(); }, [loadMembers]);
   const years = useMemo(() => Array.from(new Set([...members.map((member) => member.year), now.getFullYear()])).sort((a, b) => b - a), [members, now]);
 
   useEffect(() => { let active = true; void getPayments().then((rows) => { if (active) setPayments(rows); }).catch(() => { if (active) setPayments([]); }); return () => { active = false; }; }, [members]);
