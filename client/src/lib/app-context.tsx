@@ -223,7 +223,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.error(error instanceof Error ? error.message : "Could not add member.");
       return null;
     }
-  }, [user, invalidateSummaryForPeriods, storePeriodMembers, loadMembers]);
+  }, [user, storePeriodMembers, loadMembers]);
 
   const addMembers = useCallback(async (list: ImportMemberInput[]) => {
     if (!user || !list.length) return { importedCount: 0, failedCount: 0, errors: [] };
@@ -286,7 +286,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.error(message);
       throw error;
     }
-  }, [user, storePeriodMembers, invalidateSummaryForPeriods]);
+  }, [user, storePeriodMembers]);
 
   const recordPayment = useCallback(async (
     memberId: string,
@@ -309,7 +309,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.error(message);
       throw error;
     }
-  }, [user, members, invalidateSummaryForPeriods, loadMembers]);
+  }, [user, members, loadMembers]);
 
   const deleteMember = useCallback(async (id: string) => {
     if (!user) return;
@@ -328,7 +328,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.error(error instanceof Error ? error.message : "Could not delete the selected monthly record.");
       throw error;
     }
-  }, [user, members, storePeriodMembers, invalidateSummaryForPeriods]);
+  }, [user, members, storePeriodMembers]);
 
   const toggleHold = useCallback(async (id: string) => {
     const target = members.find((member) => member.id === id);
